@@ -6,7 +6,7 @@ cfg.readfp(open('apps.cfg'))
 
 # General variables
 COINSCOPED_API_ADDR = cfg.get('general', 'coinscoped_api_addr')
-COINSCOPED_API_PORT = cfg.get('general', 'coinscoped_api_port')
+COINSCOPED_API_PORT = int(cfg.get('general', 'coinscoped_api_port'))
 
 # Nethealth
 MAINNET_PORT = 8333
