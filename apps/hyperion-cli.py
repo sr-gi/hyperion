@@ -52,8 +52,7 @@ if __name__ == '__main__':
     if command in ['getpeer', 'getpeerhistory']:
         if len(args) == 2:
             arg = args[1]
-        elif len(args) == 3:
-            command = 'getpeerold'
+        elif command == 'getpeer' and len(args) == 3:
             arg = args[1:]
         else:
             raise Exception("Argument missing. Use help for usage information.")

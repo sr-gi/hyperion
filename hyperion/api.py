@@ -32,7 +32,7 @@ def serve_data(debug, conn, remote_addr):
                 command = msg
                 arg = None
 
-            if command == 'getpeer' and arg:
+            if command == 'getpeer' and type(arg) == str:
                 peer_ip = arg
                 peer = shared.peers_meta.get(peer_ip)
                 if peer:
@@ -46,7 +46,7 @@ def serve_data(debug, conn, remote_addr):
 
                 conn.send(peer)
 
-            elif command == 'getpeerold' and type(arg) == list and len(arg) == 2:
+            elif command == 'getpeer' and type(arg) == list and len(arg) == 2:
                 peer_ip = arg[0]
                 ts = arg[1]
 
