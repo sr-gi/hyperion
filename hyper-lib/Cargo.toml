@@ -7,3 +7,5 @@ edition = "2021"
 
 [dependencies]
 graphrs = "0.9.0"
+log = "0.4.20"
+simple_logger = "5.0.0"

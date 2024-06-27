@@ -51,7 +51,7 @@ fn main() -> anyhow::Result<()> {
         REACHABLE_NODE_COUNT
     );
     // Create nodes
-    let mut unreachable_nodes = (0..UNREACHABLE_NODE_COUNT)
+    let mut unreachable_nodes: Vec<Node> = (0..UNREACHABLE_NODE_COUNT)
         .map(|i| Node::new(i, false))
         .collect::<Vec<_>>();
     let mut reachable_nodes = (UNREACHABLE_NODE_COUNT..TOTAL_NODE_COUNT)
