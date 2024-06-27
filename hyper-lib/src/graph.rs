@@ -5,7 +5,7 @@ use graphrs::{Error, Graph, GraphSpecs};
 
 use crate::node::{Node, NodeId};
 
-pub fn build_graph(
+pub fn build_grap(
     reachable_nodes: &Vec<Node>,
     unreachable_nodes: &Vec<Node>,
 ) -> Result<Graph<NodeId, ()>, Error> {
@@ -17,12 +17,12 @@ pub fn build_graph(
 
     let mut edges = Vec::new();
     for node in reachable_nodes.iter() {
-        for out_peer_id in node.get_outbounds().iter() {
+        for out_peer_id in node.get_outbounds().keys() {
             edges.push(graphrs::Edge::new(node.get_id(), *out_peer_id))
         }
     }
     for node in unreachable_nodes.iter() {
-        for out_peer_id in node.get_outbounds().iter() {
+        for out_peer_id in node.get_outbounds().keys() {
             edges.push(graphrs::Edge::new(node.get_id(), *out_peer_id))
         }
     }
