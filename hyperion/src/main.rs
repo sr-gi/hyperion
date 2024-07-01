@@ -4,9 +4,10 @@ use std::sync::mpsc::channel;
 use log::LevelFilter;
 use rand::distributions::{Distribution, Uniform};
 use rand::rngs::StdRng;
-use rand::{thread_rng, RngCore, SeedableRng};
+use rand::{thread_rng, Rng, RngCore, SeedableRng};
 use simple_logger::SimpleLogger;
 
+use hyper_lib::network::Network;
 use hyper_lib::node::{Node, NodeId};
 use hyper_lib::MAX_OUTBOUND_CONNECTIONS;
 
@@ -52,7 +53,9 @@ fn main() -> anyhow::Result<()> {
         REACHABLE_NODE_COUNT
     );
 
-    let (sender, _) = channel();
+    let (sender, receiver) = channel();
+    let mut network = Network::new(TOTAL_NODE_COUNT as usize, receiver);
+
     // Create nodes
     let mut unreachable_nodes: Vec<Node> = (0..UNREACHABLE_NODE_COUNT)
         .map(|i| Node::new(i, false, sender.clone()))
@@ -111,6 +114,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
     }
+    network.nodes.extend(unreachable_nodes);
 
     log::debug!("Accepting connections from reachable nodes to reachable");
     // Accept connections (to reachable peer) from reachable peers
@@ -122,6 +126,28 @@ fn main() -> anyhow::Result<()> {
             node.accept_connection(*peer_id);
         }
     }
+    network.nodes.extend(reachable_nodes);
 
-    Ok(())
+    // Start the INV dispatch threads for each node
+    for node in network.nodes.iter() {
+        node.dispatch_invs();
+        node.handle_delayed_requests();
+    }
+
+    // Pick a (source) node to broadcast the target transaction from.
+    let txid = rng.next_u32();
+    let source_node_id = rng.gen_range(0..TOTAL_NODE_COUNT);
+    let source_node = network.nodes.get_mut(source_node_id as usize).unwrap();
+    source_node.broadcast_tx(txid);
+
+    // Start the "network" loop, that is, the message passing between nodes
+    loop {
+        let (msg, src, dst) = network.messages.recv().unwrap();
+        log::info!("Received {msg} from node {src} to node {dst}");
+        network
+            .nodes
+            .get_mut(dst as usize)
+            .unwrap()
+            .receive_message_from(msg, src);
+    }
 }
