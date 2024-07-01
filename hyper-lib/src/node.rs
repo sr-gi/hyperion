@@ -2,58 +2,10 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use crate::network::NetworkMessage;
+use crate::TxId;
+
 pub type NodeId = u32;
-pub type TxId = u32;
-
-#[derive(Copy, Clone)]
-pub enum NetworkMessage {
-    INV(TxId),
-    GETDATA(TxId),
-    TX(TxId),
-}
-
-impl NetworkMessage {
-    fn inner(&self) -> &TxId {
-        match self {
-            NetworkMessage::INV(x) => &x,
-            NetworkMessage::GETDATA(x) => &x,
-            NetworkMessage::TX(x) => &x,
-        }
-    }
-
-    fn get_size(&self) -> u32 {
-        // FIXME: Add some sizes that make sense
-        match self {
-            NetworkMessage::INV(_) => 32,
-            NetworkMessage::GETDATA(_) => 32,
-            NetworkMessage::TX(_) => 150,
-        }
-    }
-
-    fn is_inv(&self) -> bool {
-        matches!(self, NetworkMessage::INV(..))
-    }
-
-    fn is_get_data(&self) -> bool {
-        matches!(self, NetworkMessage::GETDATA(..))
-    }
-
-    fn is_tx(&self) -> bool {
-        matches!(self, NetworkMessage::TX(..))
-    }
-}
-
-impl std::fmt::Display for NetworkMessage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let (m, txid) = match self {
-            NetworkMessage::INV(x) => ("inv", x),
-            NetworkMessage::GETDATA(x) => ("getdata", x),
-            NetworkMessage::TX(x) => ("tx", x),
-        };
-
-        write!(f, "{m}(txid: {txid:x})")
-    }
-}
 
 #[derive(Clone)]
 pub struct Peer {
