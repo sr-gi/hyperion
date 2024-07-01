@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::mpsc::channel;
 
 use log::LevelFilter;
 use rand::distributions::{Distribution, Uniform};
@@ -50,12 +51,14 @@ fn main() -> anyhow::Result<()> {
         UNREACHABLE_NODE_COUNT,
         REACHABLE_NODE_COUNT
     );
+
+    let (sender, _) = channel();
     // Create nodes
     let mut unreachable_nodes: Vec<Node> = (0..UNREACHABLE_NODE_COUNT)
-        .map(|i| Node::new(i, false))
+        .map(|i| Node::new(i, false, sender.clone()))
         .collect::<Vec<_>>();
     let mut reachable_nodes = (UNREACHABLE_NODE_COUNT..TOTAL_NODE_COUNT)
-        .map(|i| Node::new(i, true))
+        .map(|i| Node::new(i, true, sender.clone()))
         .collect::<Vec<_>>();
 
     log::info!(
