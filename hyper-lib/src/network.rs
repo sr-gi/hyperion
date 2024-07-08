@@ -1,9 +1,6 @@
-use std::sync::mpsc::Receiver;
-
-use crate::node::{Node, NodeId};
 use crate::TxId;
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
 pub enum NetworkMessage {
     INV(TxId),
     GETDATA(TxId),
@@ -13,9 +10,9 @@ pub enum NetworkMessage {
 impl NetworkMessage {
     pub fn inner(&self) -> &TxId {
         match self {
-            NetworkMessage::INV(x) => &x,
-            NetworkMessage::GETDATA(x) => &x,
-            NetworkMessage::TX(x) => &x,
+            NetworkMessage::INV(x) => x,
+            NetworkMessage::GETDATA(x) => x,
+            NetworkMessage::TX(x) => x,
         }
     }
 
@@ -50,19 +47,5 @@ impl std::fmt::Display for NetworkMessage {
         };
 
         write!(f, "{m}(txid: {txid:x})")
-    }
-}
-
-pub struct Network {
-    pub nodes: Vec<Node>,
-    pub messages: Receiver<(NetworkMessage, NodeId, NodeId)>,
-}
-
-impl Network {
-    pub fn new(node_count: usize, messages: Receiver<(NetworkMessage, NodeId, NodeId)>) -> Self {
-        Self {
-            nodes: Vec::with_capacity(node_count),
-            messages,
-        }
     }
 }
