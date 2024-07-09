@@ -8,7 +8,7 @@ use crate::network::NetworkMessage;
 use crate::simulator::Event;
 use crate::TxId;
 
-pub type NodeId = u32;
+pub type NodeId = usize;
 
 static INBOUND_INVENTORY_BROADCAST_INTERVAL: u64 = 5;
 static OUTBOUND_INVENTORY_BROADCAST_INTERVAL: u64 = 2;

@@ -5,4 +5,4 @@ pub mod simulator;
 
 pub type TxId = u32;
 
-pub const MAX_OUTBOUND_CONNECTIONS: u16 = 8;
+pub const MAX_OUTBOUND_CONNECTIONS: usize = 8;
