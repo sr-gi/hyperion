@@ -192,8 +192,7 @@ impl Node {
         self.add_known_transaction(txid);
         let mut events = Vec::new();
 
-        // FIXME: Check if we can avoid clone here
-        for peer_id in self.out_peers.clone().into_keys() {
+        for peer_id in self.out_peers.keys().cloned().collect::<Vec<_>>() {
             // We are initializing the interval sampling of the transaction originator here. This is because
             // we don't want to start sampling until we have something to send to our peers. Otherwise we would
             // just create useless events just for sampling.
@@ -215,8 +214,7 @@ impl Node {
             Event::sample_new_interval(self.node_id, None),
             next_interval,
         ));
-        // FIXME: Check if we can avoid clone here
-        for peer_id in self.in_peers.clone().into_keys() {
+        for peer_id in self.in_peers.keys().cloned().collect::<Vec<_>>() {
             if let Some((event, t)) =
                 self.send_message_to(NetworkMessage::INV(txid), peer_id, next_interval)
             {

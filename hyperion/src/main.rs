@@ -1,5 +1,5 @@
 use std::cmp::Reverse;
-use std::collections::{hash_map::Entry, HashMap, HashSet};
+use std::collections::HashSet;
 
 use log::LevelFilter;
 use rand::distributions::{Distribution, Uniform};
@@ -82,54 +82,42 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    {
-        log::info!(
-            "Connecting reachable nodes to reachable ({} connections)",
-            REACHABLE_NODE_COUNT * MAX_OUTBOUND_CONNECTIONS as u32
-        );
-        // Connect reachable peers among themselves
-        let mut accept_connection_from: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
-        for node in reachable_nodes.iter_mut() {
-            // Initialize the set with our own id to prevents loops and extend it with all
-            // needs that have already initiated a connection with us
-            let mut already_connected_to = HashSet::from([node.get_id()]);
-            already_connected_to.extend(
-                accept_connection_from
-                    .get(&node.get_id())
-                    .unwrap_or(&Vec::new())
-                    .iter(),
-            );
+    log::info!(
+        "Connecting reachable nodes to reachable ({} connections)",
+        REACHABLE_NODE_COUNT * MAX_OUTBOUND_CONNECTIONS as u32
+    );
+    for node_id in UNREACHABLE_NODE_COUNT..TOTAL_NODE_COUNT {
+        let mut already_connected_to = reachable_nodes[(node_id - UNREACHABLE_NODE_COUNT) as usize]
+            .get_inbounds()
+            .keys()
+            .cloned()
+            .collect::<HashSet<_>>();
+        already_connected_to.insert(node_id);
 
-            for _ in 0..MAX_OUTBOUND_CONNECTIONS {
-                let peer_id = get_peer_to_connect(&mut already_connected_to, &mut rng, &peers_die);
-                node.connect(peer_id);
+        for _ in 0..MAX_OUTBOUND_CONNECTIONS {
+            let peer_id = get_peer_to_connect(&mut already_connected_to, &mut rng, &peers_die);
 
-                if let Entry::Vacant(e) = accept_connection_from.entry(peer_id) {
-                    e.insert([node.get_id()].into());
-                } else {
-                    accept_connection_from
-                        .get_mut(&peer_id)
-                        .unwrap()
-                        .push(node.get_id());
-                }
-            }
+            let (node, peer) = if peer_id < (node_id as u32) {
+                let (r1, r2) =
+                    reachable_nodes.split_at_mut((node_id - UNREACHABLE_NODE_COUNT) as usize);
+                let peer = &mut r1[(peer_id - UNREACHABLE_NODE_COUNT) as usize];
+                let node = &mut r2[0];
+                (node, peer)
+            } else {
+                let (r1, r2) =
+                    reachable_nodes.split_at_mut((peer_id - UNREACHABLE_NODE_COUNT) as usize);
+                let node = &mut r1[(node_id - UNREACHABLE_NODE_COUNT) as usize];
+                let peer = &mut r2[0];
+                (node, peer)
+            };
+
+            node.connect(peer_id);
+            peer.accept_connection(node_id as NodeId);
         }
-        simulator.network.extend(unreachable_nodes);
-
-        log::debug!("Accepting connections from reachable nodes to reachable");
-        // Accept connections (to reachable peer) from reachable peers
-        // We need to split this in two since we are already borrowing reachable_nodes mutably
-        // when iteration over them to create the connection, so we cannot borrow twice within
-        // the same context
-        for node in reachable_nodes.iter_mut() {
-            if let Some(peers) = accept_connection_from.get(&node.get_id()) {
-                for peer_id in peers {
-                    node.accept_connection(*peer_id);
-                }
-            }
-        }
-        simulator.network.extend(reachable_nodes);
     }
+
+    simulator.network.extend(unreachable_nodes);
+    simulator.network.extend(reachable_nodes);
 
     // Pick a (source) node to broadcast the target transaction from.
     let txid = rng.next_u32();
