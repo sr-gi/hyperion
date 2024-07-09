@@ -17,7 +17,7 @@ use hyper_lib::MAX_OUTBOUND_CONNECTIONS;
 // enough distinct nodes to pick from). In the current state, the code will try to build the network forever.
 const UNREACHABLE_NODE_COUNT: u32 = 100000;
 const REACHABLE_NODE_COUNT: u32 = (UNREACHABLE_NODE_COUNT as f32 * 0.1) as u32;
-const TOTAL_NODE_COUNT: u32 = UNREACHABLE_NODE_COUNT + REACHABLE_NODE_COUNT;
+const TOTAL_NODE_COUNT: u32 = REACHABLE_NODE_COUNT + UNREACHABLE_NODE_COUNT;
 
 fn get_peer_to_connect(
     already_connected_to: &mut HashSet<u32>,
@@ -44,23 +44,23 @@ fn main() -> anyhow::Result<()> {
     // This is just a wrapper so we can end up providing our own seed if needed
     let mut rng = StdRng::seed_from_u64(thread_rng().next_u64());
     // Uniform distribution so we can get peer ids in the reachable range
-    let peers_die = Uniform::from(UNREACHABLE_NODE_COUNT..TOTAL_NODE_COUNT);
+    let peers_die = Uniform::from(0..REACHABLE_NODE_COUNT);
 
     log::info!(
-        "Creating nodes ({}: {} unreachable, {} reachable)",
+        "Creating nodes ({}: {} reachable, {} unreachable)",
         TOTAL_NODE_COUNT,
-        UNREACHABLE_NODE_COUNT,
-        REACHABLE_NODE_COUNT
+        REACHABLE_NODE_COUNT,
+        UNREACHABLE_NODE_COUNT
     );
 
     let mut simulator = Simulator::new(TOTAL_NODE_COUNT as usize);
 
     // Create nodes
-    let mut unreachable_nodes: Vec<Node> = (0..UNREACHABLE_NODE_COUNT)
-        .map(|i| Node::new(i, false))
-        .collect::<Vec<_>>();
-    let mut reachable_nodes = (UNREACHABLE_NODE_COUNT..TOTAL_NODE_COUNT)
+    let mut reachable_nodes = (0..REACHABLE_NODE_COUNT)
         .map(|i| Node::new(i, true))
+        .collect::<Vec<_>>();
+    let mut unreachable_nodes: Vec<Node> = (REACHABLE_NODE_COUNT..TOTAL_NODE_COUNT)
+        .map(|i| Node::new(i, false))
         .collect::<Vec<_>>();
 
     log::info!(
@@ -74,7 +74,7 @@ fn main() -> anyhow::Result<()> {
             let peer_id: u32 = get_peer_to_connect(&mut already_connected_to, &mut rng, &peers_die);
             node.connect(peer_id);
             reachable_nodes
-                .get_mut((peer_id - UNREACHABLE_NODE_COUNT) as usize)
+                .get_mut(peer_id as usize)
                 .ok_or_else(|| {
                     anyhow::anyhow!("Cannot connect to reachable peer {peer_id}. Peer not found")
                 })?
@@ -86,27 +86,25 @@ fn main() -> anyhow::Result<()> {
         "Connecting reachable nodes to reachable ({} connections)",
         REACHABLE_NODE_COUNT * MAX_OUTBOUND_CONNECTIONS as u32
     );
-    for node_id in UNREACHABLE_NODE_COUNT..TOTAL_NODE_COUNT {
-        let mut already_connected_to = reachable_nodes[(node_id - UNREACHABLE_NODE_COUNT) as usize]
+    for node_id in 0..reachable_nodes.len() {
+        let mut already_connected_to = reachable_nodes[node_id]
             .get_inbounds()
             .keys()
             .cloned()
             .collect::<HashSet<_>>();
-        already_connected_to.insert(node_id);
+        already_connected_to.insert(node_id as u32);
 
         for _ in 0..MAX_OUTBOUND_CONNECTIONS {
             let peer_id = get_peer_to_connect(&mut already_connected_to, &mut rng, &peers_die);
 
             let (node, peer) = if peer_id < (node_id as u32) {
-                let (r1, r2) =
-                    reachable_nodes.split_at_mut((node_id - UNREACHABLE_NODE_COUNT) as usize);
-                let peer = &mut r1[(peer_id - UNREACHABLE_NODE_COUNT) as usize];
+                let (r1, r2) = reachable_nodes.split_at_mut(node_id as usize);
+                let peer = &mut r1[peer_id as usize];
                 let node = &mut r2[0];
                 (node, peer)
             } else {
-                let (r1, r2) =
-                    reachable_nodes.split_at_mut((peer_id - UNREACHABLE_NODE_COUNT) as usize);
-                let node = &mut r1[(node_id - UNREACHABLE_NODE_COUNT) as usize];
+                let (r1, r2) = reachable_nodes.split_at_mut(peer_id as usize);
+                let node = &mut r1[node_id as usize];
                 let peer = &mut r2[0];
                 (node, peer)
             };
@@ -116,8 +114,8 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    simulator.network.extend(unreachable_nodes);
     simulator.network.extend(reachable_nodes);
+    simulator.network.extend(unreachable_nodes);
 
     // Pick a (source) node to broadcast the target transaction from.
     let txid = rng.next_u32();
