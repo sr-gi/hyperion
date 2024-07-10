@@ -11,6 +11,5 @@ hyper-lib = { path = "../hyper-lib" }
 anyhow = { version = "1.0.69", features = ["backtrace"] }
 graphrs = "0.9.0"
 log = "0.4.20"
-rand = "0.8.5"
 simple_logger = "5.0.0"
 
