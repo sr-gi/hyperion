@@ -32,38 +32,37 @@ fn main() -> anyhow::Result<()> {
     }
 
     // Process events until the queue is empty
-    while let Some((event, t)) = simulator.event_queue.pop() {
+    while let Some((event, time)) = simulator.event_queue.pop().map(|(e, t)| (e, t.0)) {
         match event {
             Event::SampleNewInterval(target, peer_id) => {
                 simulator
                     .network
                     .get_node_mut(target)
                     .unwrap()
-                    .get_next_announcement_time(t.0, peer_id);
+                    .get_next_announcement_time(time, peer_id);
             }
             Event::ReceiveMessageFrom(src, dst, msg) => {
-                let response = simulator
+                for (future_event, future_time) in simulator
                     .network
                     .get_node_mut(dst)
                     .unwrap()
-                    .receive_message_from(msg, src, t.0);
-
-                for (next_event, next_interval) in response {
+                    .receive_message_from(msg, src, time)
+                {
                     simulator
                         .event_queue
-                        .push(next_event, Reverse(next_interval));
+                        .push(future_event, Reverse(future_time));
                 }
             }
             Event::ProcessDelayedRequest(target, txid) => {
-                let response = simulator
+                if let Some((delayed_event, next_interval)) = simulator
                     .network
                     .get_node_mut(target)
                     .unwrap()
-                    .process_delayed_request(txid, t.0);
-                if let Some((next_event, next_interval)) = response {
+                    .process_delayed_request(txid, time)
+                {
                     simulator
                         .event_queue
-                        .push(next_event, Reverse(next_interval));
+                        .push(delayed_event, Reverse(next_interval));
                 }
             }
         }

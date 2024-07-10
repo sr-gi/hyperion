@@ -22,6 +22,7 @@ impl Event {
     }
 
     pub fn receive_message_from(src: NodeId, dst: NodeId, msg: NetworkMessage) -> Self {
+        // TODO: Add a network delay for received messages
         Event::ReceiveMessageFrom(src, dst, msg)
     }
 
