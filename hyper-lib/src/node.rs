@@ -6,14 +6,13 @@ use rand_distr::{Distribution, Exp};
 
 use crate::network::NetworkMessage;
 use crate::simulator::Event;
-use crate::TxId;
+use crate::{TxId, SECS_TO_NANOS};
 
 pub type NodeId = usize;
 
 static INBOUND_INVENTORY_BROADCAST_INTERVAL: u64 = 5;
 static OUTBOUND_INVENTORY_BROADCAST_INTERVAL: u64 = 2;
 static NONPREF_PEER_TX_DELAY: u64 = 2;
-static SECS_TO_NANOS: u64 = 1_000_000_000;
 
 macro_rules! debug_log {
     ($time:tt, $id:expr, $($arg:tt)*)

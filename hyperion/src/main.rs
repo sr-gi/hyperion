@@ -1,5 +1,3 @@
-use std::cmp::Reverse;
-
 use log::LevelFilter;
 use simple_logger::SimpleLogger;
 
@@ -27,12 +25,12 @@ fn main() -> anyhow::Result<()> {
     let txid = simulator.get_random_txid();
     let source_node_id = simulator.get_random_nodeid();
     let source_node = simulator.get_node_mut(source_node_id).unwrap();
-    for (event, t) in source_node.broadcast_tx(txid, 0) {
-        simulator.event_queue.push(event, Reverse(t));
+    for (event, time) in source_node.broadcast_tx(txid, 0) {
+        simulator.add_event(event, time);
     }
 
     // Process events until the queue is empty
-    while let Some((event, time)) = simulator.event_queue.pop().map(|(e, t)| (e, t.0)) {
+    while let Some((event, time)) = simulator.get_next_event() {
         match event {
             Event::SampleNewInterval(target, peer_id) => {
                 simulator
@@ -48,9 +46,7 @@ fn main() -> anyhow::Result<()> {
                     .unwrap()
                     .receive_message_from(msg, src, time)
                 {
-                    simulator
-                        .event_queue
-                        .push(future_event, Reverse(future_time));
+                    simulator.add_event(future_event, future_time);
                 }
             }
             Event::ProcessDelayedRequest(target, txid) => {
@@ -60,9 +56,7 @@ fn main() -> anyhow::Result<()> {
                     .unwrap()
                     .process_delayed_request(txid, time)
                 {
-                    simulator
-                        .event_queue
-                        .push(delayed_event, Reverse(next_interval));
+                    simulator.add_event(delayed_event, next_interval);
                 }
             }
         }
@@ -71,6 +65,7 @@ fn main() -> anyhow::Result<()> {
     // Make sure every node has received the transaction
     for node in simulator.network.get_nodes() {
         assert!(node.knows_transaction(&txid));
+        log::info!("Node {}: {}", node.get_id(), node.get_statistics());
     }
 
     Ok(())
