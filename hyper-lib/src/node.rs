@@ -65,6 +65,50 @@ impl std::default::Default for Peer {
 }
 
 #[derive(Clone)]
+pub struct NodeStatistics {
+    // sent/received
+    inv: (u32, u32),
+    get_data: (u32, u32),
+    tx: (u32, u32),
+}
+
+impl NodeStatistics {
+    pub fn new() -> Self {
+        NodeStatistics {
+            inv: (0, 0),
+            get_data: (0, 0),
+            tx: (0, 0),
+        }
+    }
+
+    pub fn add_sent(&mut self, msg: NetworkMessage) {
+        match msg {
+            NetworkMessage::INV(_) => self.inv.0 += 1,
+            NetworkMessage::GETDATA(_) => self.get_data.0 += 1,
+            NetworkMessage::TX(_) => self.tx.0 += 1,
+        }
+    }
+
+    pub fn add_received(&mut self, msg: NetworkMessage) {
+        match msg {
+            NetworkMessage::INV(_) => self.inv.1 += 1,
+            NetworkMessage::GETDATA(_) => self.get_data.1 += 1,
+            NetworkMessage::TX(_) => self.tx.1 += 1,
+        }
+    }
+}
+
+impl std::fmt::Display for NodeStatistics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "INVS: {}/{}. GETDATA: {}/{}. TX: {}/{}",
+            self.inv.0, self.inv.1, self.get_data.0, self.get_data.1, self.tx.0, self.tx.1,
+        )
+    }
+}
+
+#[derive(Clone)]
 pub struct Node {
     node_id: NodeId,
     is_reachable: bool,
@@ -75,6 +119,7 @@ pub struct Node {
     known_transactions: HashSet<TxId>,
     inbounds_poisson_timer: PoissonTimer,
     outbounds_poisson_timers: HashMap<NodeId, PoissonTimer>,
+    node_statistics: NodeStatistics,
 }
 
 impl Node {
@@ -89,6 +134,7 @@ impl Node {
             known_transactions: HashSet::new(),
             inbounds_poisson_timer: PoissonTimer::new(INBOUND_INVENTORY_BROADCAST_INTERVAL),
             outbounds_poisson_timers: HashMap::new(),
+            node_statistics: NodeStatistics::new(),
         }
     }
 
@@ -189,6 +235,10 @@ impl Node {
         self.known_transactions.insert(txid);
     }
 
+    pub fn get_statistics(&self) -> &NodeStatistics {
+        &self.node_statistics
+    }
+
     pub fn broadcast_tx(&mut self, txid: TxId, current_time: u64) -> Vec<(Event, u64)> {
         self.add_known_transaction(txid);
         let mut events = Vec::new();
@@ -246,6 +296,8 @@ impl Node {
                         Event::process_delayed_request(self.node_id, txid),
                         request_time + NONPREF_PEER_TX_DELAY * SECS_TO_NANOS,
                     ));
+                } else {
+                    log::info!("(Node {}) Another delayed getdata for transaction (txid: {txid:x}) has already been scheduled, not requesting to (peer_id: {peer_id})", self.node_id);
                 }
             } else {
                 log::info!("(Node {}) Sending getdata to peer {peer_id}", self.node_id);
@@ -279,12 +331,10 @@ impl Node {
             if let Some(peer_id) = self.delayed_requests.remove(&txid) {
                 self.requested_transactions.insert(txid);
 
+                let msg = NetworkMessage::GETDATA(txid);
+                self.node_statistics.add_sent(msg);
                 return Some((
-                    Event::receive_message_from(
-                        self.node_id,
-                        peer_id,
-                        NetworkMessage::GETDATA(txid),
-                    ),
+                    Event::receive_message_from(self.node_id, peer_id, msg),
                     request_time,
                 ));
             } else {
@@ -310,6 +360,7 @@ impl Node {
         request_time: u64,
     ) -> Option<(Event, u64)> {
         let we_know_tx = self.knows_transaction(msg.inner());
+        let mut message = None;
 
         if let Some(peer) = self.get_peer_mut(&peer_id) {
             match msg {
@@ -325,7 +376,7 @@ impl Node {
                         return None;
                     }
                     log::info!("(Node {}) Scheduling {msg} to peer {peer_id}", self.node_id);
-                    return Some((
+                    message = Some((
                         Event::receive_message_from(self.node_id, peer_id, msg),
                         request_time,
                     ));
@@ -333,14 +384,14 @@ impl Node {
                 NetworkMessage::GETDATA(txid) => {
                     assert!(!we_know_tx, "Trying to request a transaction we already know about (txid: {txid:x}) from a peer (peer_id: {peer_id})");
                     assert!(peer.knows_transaction(&txid), "Trying to request a transaction (txid: {txid:x}) from a peer that shouldn't know about it (peer_id: {peer_id})");
-                    return self.add_request(txid, peer_id, request_time);
+                    message = self.add_request(txid, peer_id, request_time);
                 }
                 NetworkMessage::TX(txid) => {
                     assert!(we_know_tx, "Trying to send a transaction we should't know about (txid: {txid:x}) to a peer (peer_id: {peer_id})");
                     assert!(!peer.knows_transaction(&txid), "Trying to send a transaction (txid: {txid:x}) to a peer that already should know about it (peer_id: {peer_id})");
                     peer.add_known_transaction(txid);
                     log::info!("(Node {}) Sending {msg} to peer {peer_id}", self.node_id);
-                    return Some((
+                    message = Some((
                         Event::receive_message_from(self.node_id, peer_id, msg),
                         request_time,
                     ));
@@ -348,7 +399,15 @@ impl Node {
             }
         }
 
-        None
+        // Only update the "sent" node stats if we are creating a "receive from"
+        // message event for a peer
+        if let Some((event, _)) = &message {
+            if event.is_receive_message() {
+                self.node_statistics.add_sent(msg);
+            }
+        }
+
+        message
     }
 
     pub fn receive_message_from(
@@ -360,6 +419,7 @@ impl Node {
         log::info!("(Node {}) Received {msg} from peer {peer_id}", self.node_id);
         let we_know_tx = self.knows_transaction(msg.inner());
         let mut events = Vec::new();
+        self.node_statistics.add_received(msg);
 
         if let Some(peer) = self.get_peer_mut(&peer_id) {
             match msg {

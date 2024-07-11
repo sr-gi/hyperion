@@ -30,6 +30,10 @@ impl Event {
         Event::ProcessDelayedRequest(src, txid)
     }
 
+    pub fn is_receive_message(&self) -> bool {
+        matches!(self, Event::ReceiveMessageFrom(..))
+    }
+
     pub fn is_delayed_request(&self) -> bool {
         matches!(self, Event::ProcessDelayedRequest(..))
     }
