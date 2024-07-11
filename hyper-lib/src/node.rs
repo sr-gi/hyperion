@@ -15,6 +15,12 @@ static OUTBOUND_INVENTORY_BROADCAST_INTERVAL: u64 = 2;
 static NONPREF_PEER_TX_DELAY: u64 = 2;
 static SECS_TO_NANOS: u64 = 1_000_000_000;
 
+macro_rules! debug_log {
+    ($time:tt, $id:expr, $($arg:tt)*)
+    =>
+    (log::debug!("{}: [Node: {}] {}", $time, $id, &format!($($arg)*)));
+}
+
 #[derive(Clone)]
 pub struct PoissonTimer {
     dist: Exp<f64>,
@@ -156,11 +162,16 @@ impl Node {
 
         if current_time >= poisson_timer.next_interval {
             if is_inbound {
-                log::debug!("(Node {}) updating inbounds poisson timer", self.node_id);
-            } else {
-                log::debug!(
-                    "(Node {}) updating poisson timer for peer {}",
+                debug_log!(
+                    current_time,
                     self.node_id,
+                    "Updating inbounds poisson timer"
+                );
+            } else {
+                debug_log!(
+                    current_time,
+                    self.node_id,
+                    "Updating poisson timer for peer {}",
                     peer_id.unwrap()
                 );
             }
@@ -291,16 +302,20 @@ impl Node {
             if self.is_inbounds(&peer_id) {
                 if let Entry::Vacant(e) = self.delayed_requests.entry(txid) {
                     e.insert(peer_id);
-                    log::info!("(Node {}) Delaying getdata for transaction request (txid: {txid:x}) to peer {peer_id}", self.node_id);
+                    debug_log!(request_time, self.node_id, "Delaying getdata for transaction request (txid: {txid:x}) to peer {peer_id}");
                     return Some((
                         Event::process_delayed_request(self.node_id, txid),
                         request_time + NONPREF_PEER_TX_DELAY * SECS_TO_NANOS,
                     ));
                 } else {
-                    log::info!("(Node {}) Another delayed getdata for transaction (txid: {txid:x}) has already been scheduled, not requesting to (peer_id: {peer_id})", self.node_id);
+                    debug_log!(request_time, self.node_id, "Another delayed getdata for transaction (txid: {txid:x}) has already been scheduled, not requesting to peer_id: {peer_id}");
                 }
             } else {
-                log::info!("(Node {}) Sending getdata to peer {peer_id}", self.node_id);
+                debug_log!(
+                    request_time,
+                    self.node_id,
+                    "Sending getdata to peer {peer_id}",
+                );
                 self.requested_transactions.insert(txid);
                 self.delayed_requests.remove(&txid);
                 return Some((
@@ -313,9 +328,10 @@ impl Node {
                 ));
             }
         } else {
-            log::info!(
-                "(Node {}) Already known transaction (txid: {txid:x}), not requesting to (peer_id: {peer_id})",
-                self.node_id
+            debug_log!(
+                request_time,
+                self.node_id,
+                "Already known transaction (txid: {txid:x}), not requesting to peer_id: {peer_id}",
             );
         }
 
@@ -365,17 +381,21 @@ impl Node {
         if let Some(peer) = self.get_peer_mut(&peer_id) {
             match msg {
                 NetworkMessage::INV(txid) => {
-                    // INVs for the same transaction can get crossed. If this happens break the cycle.
                     assert!(we_know_tx, "Trying to announce a transaction we should't know about (txid: {txid:x}) to a peer (peer_id: {peer_id})");
+                    // Don't send the transaction to a peer that has already announced it to us
                     if peer.knows_transaction(&txid) {
-                        log::debug!(
-                            "(Node {}) We have already sent/or received transaction {txid:x} to/from {}, not sending it again",
+                        debug_log!(
+                            request_time,
                             self.node_id,
-                            peer_id
+                            "Node {peer_id} has already announced transaction {txid:x} to us, not announcing it back",
                         );
                         return None;
                     }
-                    log::info!("(Node {}) Scheduling {msg} to peer {peer_id}", self.node_id);
+                    debug_log!(
+                        request_time,
+                        self.node_id,
+                        "Scheduling {msg} to peer {peer_id}"
+                    );
                     message = Some((
                         Event::receive_message_from(self.node_id, peer_id, msg),
                         request_time,
@@ -390,7 +410,11 @@ impl Node {
                     assert!(we_know_tx, "Trying to send a transaction we should't know about (txid: {txid:x}) to a peer (peer_id: {peer_id})");
                     assert!(!peer.knows_transaction(&txid), "Trying to send a transaction (txid: {txid:x}) to a peer that already should know about it (peer_id: {peer_id})");
                     peer.add_known_transaction(txid);
-                    log::info!("(Node {}) Sending {msg} to peer {peer_id}", self.node_id);
+                    debug_log!(
+                        request_time,
+                        self.node_id,
+                        "Sending {msg} to peer {peer_id}"
+                    );
                     message = Some((
                         Event::receive_message_from(self.node_id, peer_id, msg),
                         request_time,
@@ -416,7 +440,11 @@ impl Node {
         peer_id: NodeId,
         request_time: u64,
     ) -> Vec<(Event, u64)> {
-        log::info!("(Node {}) Received {msg} from peer {peer_id}", self.node_id);
+        debug_log!(
+            request_time,
+            self.node_id,
+            "Received {msg} from peer {peer_id}"
+        );
         let we_know_tx = self.knows_transaction(msg.inner());
         let mut events = Vec::new();
         self.node_statistics.add_received(msg);
@@ -427,9 +455,10 @@ impl Node {
                     peer.add_known_transaction(txid);
                     // We only request transactions that we don't know about
                     if !we_know_tx {
-                        log::info!(
-                            "(Node {}) Transaction unknown. Scheduling getdata to peer {peer_id}",
-                            self.node_id
+                        debug_log!(
+                            request_time,
+                            self.node_id,
+                            "Transaction unknown. Scheduling getdata to peer {peer_id}",
                         );
                         if let Some(event) = self.send_message_to(
                             NetworkMessage::GETDATA(txid),
@@ -439,9 +468,10 @@ impl Node {
                             events.push(event);
                         }
                     } else {
-                        log::info!(
-                            "(Node {}) Already known transaction (txid: {txid:x})",
-                            self.node_id
+                        debug_log!(
+                            request_time,
+                            self.node_id,
+                            "Already known transaction (txid: {txid:x})"
                         );
                     }
                 }
