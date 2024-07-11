@@ -2,7 +2,7 @@ use std::collections::{hash_map::Entry, HashMap, HashSet};
 
 use rand::rngs::ThreadRng;
 use rand::thread_rng;
-use rand_distr::{Distribution, Poisson};
+use rand_distr::{Distribution, Exp};
 
 use crate::network::NetworkMessage;
 use crate::simulator::Event;
@@ -17,15 +17,15 @@ static SECS_TO_NANOS: u64 = 1_000_000_000;
 
 #[derive(Clone)]
 pub struct PoissonTimer {
-    dist: Poisson<f32>,
+    dist: Exp<f64>,
     rng: ThreadRng,
     next_interval: u64,
 }
 
 impl PoissonTimer {
-    pub fn new(lambda: u64) -> Self {
+    pub fn new(mean: u64) -> Self {
         Self {
-            dist: Poisson::new(lambda as f32).unwrap(),
+            dist: Exp::new(1.0 / mean as f64).unwrap(),
             rng: thread_rng(),
             next_interval: 0,
         }
@@ -33,7 +33,7 @@ impl PoissonTimer {
 
     pub fn sample(&mut self) -> u64 {
         // Threat samples as nanoseconds
-        (self.dist.sample(&mut self.rng) * SECS_TO_NANOS as f32) as u64
+        (self.dist.sample(&mut self.rng) * SECS_TO_NANOS as f64).round() as u64
     }
 }
 
