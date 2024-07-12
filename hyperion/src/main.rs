@@ -25,6 +25,10 @@ fn main() -> anyhow::Result<()> {
     let txid = simulator.get_random_txid();
     let source_node_id = simulator.get_random_nodeid();
     let source_node = simulator.get_node_mut(source_node_id).unwrap();
+
+    log::info!(
+        "Starting simulation: broadcasting transaction (txid: {txid:x}) from node {source_node_id}"
+    );
     for (event, time) in source_node.broadcast_tx(txid, 0) {
         simulator.add_event(event, time);
     }
@@ -49,6 +53,16 @@ fn main() -> anyhow::Result<()> {
                     simulator.add_event(future_event, future_time);
                 }
             }
+            Event::ProcessScheduledAnnouncement(src, dst, txid) => {
+                if let Some((scheduled_event, t)) = simulator
+                    .network
+                    .get_node_mut(src)
+                    .unwrap()
+                    .process_scheduled_announcement(dst, txid, time)
+                {
+                    simulator.add_event(scheduled_event, t);
+                }
+            }
             Event::ProcessDelayedRequest(target, txid) => {
                 if let Some((delayed_event, next_interval)) = simulator
                     .network
@@ -67,6 +81,8 @@ fn main() -> anyhow::Result<()> {
         assert!(node.knows_transaction(&txid));
         log::info!("Node {}: {}", node.get_id(), node.get_statistics());
     }
+
+    log::info!("Transaction has reached all nodes");
 
     Ok(())
 }

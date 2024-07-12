@@ -44,12 +44,14 @@ impl PoissonTimer {
 
 #[derive(Clone)]
 pub struct Peer {
+    scheduled_announcements: HashSet<TxId>,
     known_transactions: HashSet<TxId>,
 }
 
 impl Peer {
     pub fn new() -> Self {
         Self {
+            scheduled_announcements: HashSet::new(),
             known_transactions: HashSet::new(),
         }
     }
@@ -60,6 +62,18 @@ impl Peer {
 
     fn add_known_transaction(&mut self, txid: TxId) {
         self.known_transactions.insert(txid);
+    }
+
+    fn has_announcement_scheduled(&mut self, txid: &TxId) -> bool {
+        self.scheduled_announcements.contains(txid)
+    }
+
+    fn schedule_announcement(&mut self, txid: TxId) {
+        self.scheduled_announcements.insert(txid);
+    }
+
+    fn remove_scheduled_announcement(&mut self, txid: &TxId) {
+        self.scheduled_announcements.remove(txid);
     }
 }
 
@@ -259,15 +273,17 @@ impl Node {
             // would create useless events just for sampling. Notice this works since samples from a
             // Poisson process is memoryless (past events do not affect future events)
             let next_interval = self.get_next_announcement_time(current_time, Some(peer_id));
-            if let Some((event, t)) =
-                self.send_message_to(NetworkMessage::INV(txid), peer_id, next_interval)
-            {
-                events.push((
-                    Event::sample_new_interval(self.node_id, Some(peer_id)),
-                    next_interval,
-                ));
-                events.push((event, t));
-            }
+            debug_log!(
+                current_time,
+                self.node_id,
+                "Scheduling inv to peer {peer_id}"
+            );
+            // Schedule the announcement to go off on the next trickle for the given peer
+            events.push((self.schedule_announcement(peer_id, txid), next_interval));
+            events.push((
+                Event::sample_new_interval(self.node_id, Some(peer_id)),
+                next_interval,
+            ));
         }
 
         // For inbounds we use a shared interval
@@ -277,14 +293,32 @@ impl Node {
             next_interval,
         ));
         for peer_id in self.in_peers.keys().cloned().collect::<Vec<_>>() {
-            if let Some((event, t)) =
-                self.send_message_to(NetworkMessage::INV(txid), peer_id, next_interval)
-            {
-                events.push((event, t));
-            }
+            events.push((self.schedule_announcement(peer_id, txid), next_interval));
         }
 
         events
+    }
+
+    fn schedule_announcement(&mut self, peer_id: NodeId, txid: TxId) -> Event {
+        let peer = self.get_peer_mut(&peer_id).unwrap();
+        assert!(
+            !peer.has_announcement_scheduled(&txid),
+            "Node {peer_id} already has an announcement scheduled for transaction (txid: {txid:x})",
+        );
+        peer.schedule_announcement(txid);
+        Event::process_delayed_announcement(self.node_id, peer_id, txid)
+    }
+
+    pub fn process_scheduled_announcement(
+        &mut self,
+        peer_id: NodeId,
+        txid: TxId,
+        current_time: u64,
+    ) -> Option<(Event, u64)> {
+        self.get_peer_mut(&peer_id)
+            .unwrap()
+            .remove_scheduled_announcement(&txid);
+        self.send_message_to(NetworkMessage::INV(txid), peer_id, current_time)
     }
 
     fn add_request(
@@ -393,7 +427,7 @@ impl Node {
                     debug_log!(
                         request_time,
                         self.node_id,
-                        "Scheduling {msg} to peer {peer_id}"
+                        "Sending {msg} to peer {peer_id}"
                     );
                     message = Some((
                         Event::receive_message_from(self.node_id, peer_id, msg),
