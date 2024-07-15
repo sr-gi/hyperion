@@ -9,6 +9,7 @@ edition = "2021"
 hyper-lib = { path = "../hyper-lib" }
 
 anyhow = { version = "1.0.69", features = ["backtrace"] }
+clap = { version = "4.1.6", features = ["derive", "std", "help", "error-context"], default-features = false }
 log = "0.4.20"
 simple_logger = "5.0.0"
 

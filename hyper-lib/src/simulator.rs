@@ -54,8 +54,16 @@ pub struct Simulator {
 }
 
 impl Simulator {
-    pub fn new(reachable_count: usize, unreachable_count: usize) -> Self {
-        let mut rng: StdRng = StdRng::seed_from_u64(thread_rng().next_u64());
+    pub fn new(reachable_count: usize, unreachable_count: usize, seed: Option<u64>) -> Self {
+        let seed = if let Some(seed) = seed {
+            log::info!("Using user provided rng seed: {}", seed);
+            seed
+        } else {
+            let s = thread_rng().next_u64();
+            log::info!("Using fresh rng seed: {}", s);
+            s
+        };
+        let mut rng: StdRng = StdRng::seed_from_u64(seed);
         let network = Network::new(reachable_count, unreachable_count, &mut rng);
 
         // Create a network delay function for sent/received messages. This is in the order of

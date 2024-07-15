@@ -1,7 +1,7 @@
 use std::collections::{hash_map::Entry, HashMap, HashSet};
 
-use rand::rngs::ThreadRng;
-use rand::thread_rng;
+use rand::rngs::StdRng;
+
 use rand_distr::{Distribution, Exp};
 
 use crate::network::NetworkMessage;
@@ -23,7 +23,6 @@ macro_rules! debug_log {
 #[derive(Clone)]
 pub struct PoissonTimer {
     dist: Exp<f64>,
-    rng: ThreadRng,
     next_interval: u64,
 }
 
@@ -31,14 +30,13 @@ impl PoissonTimer {
     pub fn new(mean: u64) -> Self {
         Self {
             dist: Exp::new(1.0 / mean as f64).unwrap(),
-            rng: thread_rng(),
             next_interval: 0,
         }
     }
 
-    pub fn sample(&mut self) -> u64 {
+    pub fn sample(&mut self, rng: &mut StdRng) -> u64 {
         // Threat samples as nanoseconds
-        (self.dist.sample(&mut self.rng) * SECS_TO_NANOS as f64).round() as u64
+        (self.dist.sample(rng) * SECS_TO_NANOS as f64).round() as u64
     }
 }
 
@@ -130,6 +128,7 @@ impl std::fmt::Display for NodeStatistics {
 #[derive(Clone)]
 pub struct Node {
     node_id: NodeId,
+    rng: StdRng,
     is_reachable: bool,
     in_peers: HashMap<NodeId, Peer>,
     out_peers: HashMap<NodeId, Peer>,
@@ -142,9 +141,10 @@ pub struct Node {
 }
 
 impl Node {
-    pub fn new(node_id: NodeId, is_reachable: bool) -> Self {
+    pub fn new(node_id: NodeId, rng: StdRng, is_reachable: bool) -> Self {
         Node {
             node_id,
+            rng,
             is_reachable,
             in_peers: HashMap::new(),
             out_peers: HashMap::new(),
@@ -188,7 +188,7 @@ impl Node {
                     peer_id.unwrap()
                 );
             }
-            poisson_timer.next_interval = current_time + poisson_timer.sample();
+            poisson_timer.next_interval = current_time + poisson_timer.sample(&mut self.rng);
         }
         poisson_timer.next_interval
     }

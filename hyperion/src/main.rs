@@ -1,25 +1,21 @@
+use clap::Parser;
 use log::LevelFilter;
 use simple_logger::SimpleLogger;
 
 use hyper_lib::simulator::{Event, Simulator};
-
-// TODO: We need to do some basic assertions here to make sure the proposed network is feasible to build.
-// A network where REACHABLE_NODE_COUNT is a big proportion (or even bigger) than MAX_OUTBOUND_CONNECTIONS
-// would lead to reachable nodes not being able to achieve MAX_OUTBOUND_CONNECTIONS (since there won't be
-// enough distinct nodes to pick from). In the current state, the code will try to build the network forever.
-const UNREACHABLE_NODE_COUNT: usize = 100000;
-const REACHABLE_NODE_COUNT: usize = (UNREACHABLE_NODE_COUNT as f32 * 0.1) as usize;
+use hyperion::cli::Cli;
 
 fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+
     SimpleLogger::new()
         .with_level(LevelFilter::Warn)
-        .with_module_level("hyper_lib", LevelFilter::Info)
-        .with_module_level("hyperion", LevelFilter::Info)
+        .with_module_level("hyper_lib", cli.log_level)
+        .with_module_level("hyperion", cli.log_level)
         .init()
         .unwrap();
 
-    // This is just a wrapper so we can end up providing our own seed if needed
-    let mut simulator = Simulator::new(REACHABLE_NODE_COUNT, UNREACHABLE_NODE_COUNT);
+    let mut simulator = Simulator::new(cli.reachable, cli.unreachable, cli.seed);
 
     // Pick a (source) node to broadcast the target transaction from.
     let txid = simulator.get_random_txid();

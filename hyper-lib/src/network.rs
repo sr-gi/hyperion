@@ -63,18 +63,18 @@ pub struct Network {
 impl Network {
     pub fn new(reachable_count: usize, unreachable_count: usize, rng: &mut StdRng) -> Self {
         let mut reachable_nodes = (0..reachable_count)
-            .map(|i| Node::new(i, true))
+            .map(|i| Node::new(i, rng.clone(), true))
             .collect::<Vec<_>>();
         let mut unreachable_nodes: Vec<Node> = (reachable_count
             ..reachable_count + unreachable_count)
-            .map(|i| Node::new(i, false))
+            .map(|i| Node::new(i, rng.clone(), false))
             .collect::<Vec<_>>();
 
         log::info!(
             "Creating nodes ({}: {} reachable, {} unreachable)",
             reachable_count + unreachable_count,
             reachable_count,
-            reachable_count
+            unreachable_count
         );
 
         let peers_die = Uniform::from(0..reachable_nodes.len());
