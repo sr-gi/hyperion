@@ -20,8 +20,10 @@ macro_rules! debug_log {
     (log::debug!("{}: [Node: {}] {}", $time, $id, &format!($($arg)*)));
 }
 
+/// A discrete timer over a poisson distribution. Used to decide when to
+/// announce transactions to peers
 #[derive(Clone)]
-pub struct PoissonTimer {
+struct PoissonTimer {
     dist: Exp<f64>,
     next_interval: u64,
 }
@@ -34,15 +36,21 @@ impl PoissonTimer {
         }
     }
 
+    /// Sample a new value from the distribution. Return values are
+    /// represented as nanoseconds
     pub fn sample(&mut self, rng: &mut StdRng) -> u64 {
-        // Threat samples as nanoseconds
         (self.dist.sample(rng) * SECS_TO_NANOS as f64).round() as u64
     }
 }
 
+/// A minimal abstraction of a peer
 #[derive(Clone)]
 pub struct Peer {
+    /// Set of transactions pending to be announced. This is populated when a new announcement event
+    /// is scheduled, and consumed once the event takes place
     scheduled_announcements: HashSet<TxId>,
+    /// Transactions already known by this peer, this is populated either when a peer announced a transaction
+    /// to us, or when we send a transaction to them
     known_transactions: HashSet<TxId>,
 }
 
@@ -81,9 +89,9 @@ impl std::default::Default for Peer {
     }
 }
 
+/// Statistics about how many messages of a certain type has a node sent/received
 #[derive(Clone)]
 pub struct NodeStatistics {
-    // sent/received
     inv: (u32, u32),
     get_data: (u32, u32),
     tx: (u32, u32),
@@ -98,6 +106,7 @@ impl NodeStatistics {
         }
     }
 
+    /// Adds a sent message to the statistics
     pub fn add_sent(&mut self, msg: NetworkMessage) {
         match msg {
             NetworkMessage::INV(_) => self.inv.0 += 1,
@@ -106,6 +115,7 @@ impl NodeStatistics {
         }
     }
 
+    /// Adds a receive message to the statistics
     pub fn add_received(&mut self, msg: NetworkMessage) {
         match msg {
             NetworkMessage::INV(_) => self.inv.1 += 1,
@@ -125,18 +135,31 @@ impl std::fmt::Display for NodeStatistics {
     }
 }
 
+/// A node is the main unit of the simulator. It represents an abstractions of a Bitcoin node and
+/// stores all the data required to simulate sending and receiving transactions
 #[derive(Clone)]
 pub struct Node {
+    /// The (global) node identifier
     node_id: NodeId,
+    /// A pre-seeded rng to allow reproducing previous simulation results
     rng: StdRng,
+    /// Whether the node is reachable or not
     is_reachable: bool,
+    /// Map of inbound peers identified by their (global) node identifier
     in_peers: HashMap<NodeId, Peer>,
+    /// Map of outbound peers identified by their (global) node identifier
     out_peers: HashMap<NodeId, Peer>,
+    /// Set of transactions that have already been requested (but not yet received)
     requested_transactions: HashSet<TxId>,
+    /// Set of transactions which request has been delayed (see [Node::add_request])
     delayed_requests: HashMap<TxId, NodeId>,
+    /// Set of transaction already known by the node
     known_transactions: HashSet<TxId>,
+    /// Poisson timer shared by all inbound peers. Used to decide when to announce transactions to them
     inbounds_poisson_timer: PoissonTimer,
+    /// Map of poisson timers for outbound peers. Used to decide when to announce transactions to each of them
     outbounds_poisson_timers: HashMap<NodeId, PoissonTimer>,
+    /// Amount of messages of each time the node has sent/received
     node_statistics: NodeStatistics,
 }
 
@@ -157,6 +180,10 @@ impl Node {
         }
     }
 
+    /// Gets the next discrete time when a transaction announcement needs to be sent to a given peer.
+    /// A [peer_id] is required if the query is performed for an outbound peer, otherwise the request is
+    /// assumed to be for inbounds. The method will sample a new time if we have reached the old sample,
+    /// otherwise, the old sample will be returned.
     pub fn get_next_announcement_time(
         &mut self,
         current_time: u64,
@@ -211,10 +238,13 @@ impl Node {
         &self.out_peers
     }
 
-    pub fn is_inbounds(&self, peer_id: &NodeId) -> bool {
+    /// Check whether a given peer is an inbound connection
+    fn is_inbounds(&self, peer_id: &NodeId) -> bool {
         self.in_peers.contains_key(peer_id)
     }
 
+    /// Connects to a given peer. This method is used by the simulator to connect nodes between them
+    /// alongside its counterpart [Node::accept_connection]
     pub fn connect(&mut self, peer_id: NodeId) {
         assert!(
             !self.in_peers.contains_key(&peer_id),
@@ -231,6 +261,8 @@ impl Node {
         );
     }
 
+    /// Accept a connection from a given peer. This method is used by the simulator to connect nodes between them
+    /// alongside its counterpart [Node::connect]
     pub fn accept_connection(&mut self, peer_id: NodeId) {
         assert!(
             self.is_reachable,
@@ -251,10 +283,12 @@ impl Node {
         );
     }
 
+    /// Whether we know a given transaction
     pub fn knows_transaction(&self, txid: &TxId) -> bool {
         self.known_transactions.contains(txid)
     }
 
+    /// Add a given transaction to our known collection
     fn add_known_transaction(&mut self, txid: TxId) {
         self.known_transactions.insert(txid);
     }
@@ -263,6 +297,10 @@ impl Node {
         &self.node_statistics
     }
 
+    /// Schedules the announcement of a given transaction to all our peers, based on when the next announcement interval will be.
+    /// Inbound peers use a shared poisson timer with expected value of [INBOUND_INVENTORY_BROADCAST_INTERVAL] seconds (simulated),
+    /// while outbound have a unique one with expected value of [OUTBOUND_INVENTORY_BROADCAST_INTERVAL] seconds.
+    /// Returns a collection of the scheduled events, including re-sampling of the time intervals
     pub fn broadcast_tx(&mut self, txid: TxId, current_time: u64) -> Vec<(Event, u64)> {
         self.add_known_transaction(txid);
         let mut events = Vec::new();
@@ -299,6 +337,10 @@ impl Node {
         events
     }
 
+    /// Creates an scheduled announcement for a given transaction to a given peer.
+    /// TODO: Notice this creates an announcement **per transaction**, while INVs can actually
+    /// hold many transaction on the same message. This will need to be updated when we simulate
+    /// broadcasting multiple transactions
     fn schedule_announcement(&mut self, peer_id: NodeId, txid: TxId) -> Event {
         let peer = self.get_peer_mut(&peer_id).unwrap();
         assert!(
@@ -309,6 +351,7 @@ impl Node {
         Event::process_delayed_announcement(self.node_id, peer_id, txid)
     }
 
+    /// Processes a previously scheduled transaction announcement to a given peer, returning an event (and the time at which it should be processed) if successful
     pub fn process_scheduled_announcement(
         &mut self,
         peer_id: NodeId,
@@ -321,6 +364,9 @@ impl Node {
         self.send_message_to(NetworkMessage::INV(txid), peer_id, current_time)
     }
 
+    /// Adds the request of a given transaction to a given node to our trackers. If the node is inbounds, this will generate
+    /// a delayed request, and return an event to be processed later in time. If the node is outbounds, the request will be generated
+    /// straightaway. No request will be generated if we already know the transaction
     fn add_request(
         &mut self,
         txid: TxId,
@@ -371,6 +417,10 @@ impl Node {
         None
     }
 
+    /// Processes a delayed request for a given transaction. If the transaction has not been requested by anyone else, the delayed
+    /// request will be moved to a normal request and an event will be generated. If an outbound peer have requested this transaction
+    /// during our delay, this will simply be dropped.
+    /// Notice that we do not queue requests (because the nodes is the simulator are well behaved)
     pub fn process_delayed_request(
         &mut self,
         txid: TxId,
@@ -397,12 +447,15 @@ impl Node {
         None
     }
 
+    /// Removes a request for a given transaction from our trackers
     fn remove_request(&mut self, txid: &TxId) {
         assert!(!self.delayed_requests.contains_key(txid));
         assert!(self.requested_transactions.remove(txid));
     }
 
-    pub fn send_message_to(
+    /// Tries so send a message (of a given type) to a given peer, creating the corresponding receive message event if successful.
+    /// This may generate a delayed event on ourselves, for instance when tying to send a get data to an inbound peer
+    fn send_message_to(
         &mut self,
         msg: NetworkMessage,
         peer_id: NodeId,
@@ -467,6 +520,8 @@ impl Node {
         message
     }
 
+    /// Receives a given message from a given peer. This is called on us by the simulator when processing events from its event queue.
+    /// This may trigger us sending messages to other peers, which will generate a collection of events to be handled by the simulator
     pub fn receive_message_from(
         &mut self,
         msg: NetworkMessage,

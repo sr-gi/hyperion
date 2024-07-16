@@ -12,11 +12,16 @@ use crate::{TxId, SECS_TO_NANOS};
 
 static NET_DELAY_MEAN: f64 = 0.01 * SECS_TO_NANOS as f64; // 10ms
 
+/// An enumeration of all the events that can be created in a simulation
 #[derive(Clone, Hash, Eq, PartialEq)]
 pub enum Event {
+    /// Sample a new time interval for a given node (or for all inbounds if node id is provided)
     SampleNewInterval(NodeId, Option<NodeId>),
+    /// The destination (0) receives a new message (2) from given source (1)
     ReceiveMessageFrom(NodeId, NodeId, NetworkMessage),
+    /// A given node (0) processes an scheduled announcements (2) to a given peer (1)
     ProcessScheduledAnnouncement(NodeId, NodeId, TxId),
+    /// A given node (0) processed a delayed request of a give transaction (1)
     ProcessDelayedRequest(NodeId, TxId),
 }
 
@@ -47,9 +52,13 @@ impl Event {
 }
 
 pub struct Simulator {
+    /// A pre-seeded rng to allow reproducing previous simulation results
     rng: StdRng,
+    /// A function used to generate network delays. Follows a LogNormal distribution over a given value
     net_delay_fn: LogNormal<f64>,
+    /// The simulated network
     pub network: Network,
+    /// A queue of the events that make the simulation, ordered by discrete time
     event_queue: PriorityQueue<Event, Reverse<u64>>,
 }
 
@@ -80,6 +89,8 @@ impl Simulator {
         }
     }
 
+    /// Adds an event to the event queue, adding a random delay if the event is [Event::ReceiveMessageFrom].
+    /// These delays simulate the network transfer time for the given message
     pub fn add_event(&mut self, event: Event, mut time: u64) {
         if event.is_receive_message() {
             time += self.net_delay_fn.sample(&mut self.rng).round() as u64;
@@ -88,6 +99,7 @@ impl Simulator {
         self.event_queue.push(event, Reverse(time));
     }
 
+    /// Get the next event to be processed, as in the one with the smallest discrete time
     pub fn get_next_event(&mut self) -> Option<(Event, u64)> {
         self.event_queue.pop().map(|(e, t)| (e, t.0))
     }

@@ -6,6 +6,7 @@ use std::collections::HashSet;
 use rand::distributions::{Distribution, Uniform};
 use rand::rngs::StdRng;
 
+/// Defines the collection of network messages that can be exchanged between peers
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
 pub enum NetworkMessage {
     INV(TxId),
@@ -22,6 +23,7 @@ impl NetworkMessage {
         }
     }
 
+    /// Returns the size of the given network message
     fn get_size(&self) -> u32 {
         // FIXME: Add some sizes that make sense
         match self {
@@ -31,14 +33,17 @@ impl NetworkMessage {
         }
     }
 
+    /// Returns whether the network message is a inventory message
     pub fn is_inv(&self) -> bool {
         matches!(self, NetworkMessage::INV(..))
     }
 
+    /// Returns whether the network message is a data request message
     pub fn is_get_data(&self) -> bool {
         matches!(self, NetworkMessage::GETDATA(..))
     }
 
+    /// Returns whether the network message is transaction message
     pub fn is_tx(&self) -> bool {
         matches!(self, NetworkMessage::TX(..))
     }
@@ -57,6 +62,7 @@ impl std::fmt::Display for NetworkMessage {
 }
 
 pub struct Network {
+    /// Collection of nodes that composes the simulated network
     nodes: Vec<Node>,
 }
 
@@ -102,6 +108,9 @@ impl Network {
         Self { nodes }
     }
 
+    /// Connects a collection of unreachable nodes to a collection of reachable ones.
+    /// A given pair of nodes will have, at most, one connection between them.
+    /// Nodes to be connected to are picked at random given an uniform distribution [dist]
     fn connect_unreachable(
         unreachable_nodes: &mut [Node],
         reachable_nodes: &mut [Node],
@@ -123,6 +132,9 @@ impl Network {
         }
     }
 
+    /// Connects a collection of reachable nodes between them.
+    /// A given pair of nodes will have, at most, one connection between them.
+    /// Nodes to be connected to are picked at random given an uniform distribution [dist]
     fn connect_reachable(reachable_nodes: &mut [Node], rng: &mut StdRng, dist: &Uniform<NodeId>) {
         for node_id in 0..reachable_nodes.len() {
             let mut already_connected_to = reachable_nodes[node_id]
@@ -153,6 +165,8 @@ impl Network {
         }
     }
 
+    /// Utility function get a node we can connect to, given a list of nodes we are already connected to
+    /// and an uniform distribution [dist]
     fn get_peer_to_connect(
         already_connected_to: &mut HashSet<NodeId>,
         rng: &mut StdRng,
