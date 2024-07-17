@@ -1,11 +1,11 @@
 use std::collections::{hash_map::Entry, HashMap, HashSet};
 
 use rand::rngs::StdRng;
-
 use rand_distr::{Distribution, Exp};
 
 use crate::network::NetworkMessage;
 use crate::simulator::Event;
+use crate::statistics::NodeStatistics;
 use crate::{TxId, SECS_TO_NANOS};
 
 pub type NodeId = usize;
@@ -86,52 +86,6 @@ impl Peer {
 impl std::default::Default for Peer {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// Statistics about how many messages of a certain type has a node sent/received
-#[derive(Clone)]
-pub struct NodeStatistics {
-    inv: (u32, u32),
-    get_data: (u32, u32),
-    tx: (u32, u32),
-}
-
-impl NodeStatistics {
-    pub fn new() -> Self {
-        NodeStatistics {
-            inv: (0, 0),
-            get_data: (0, 0),
-            tx: (0, 0),
-        }
-    }
-
-    /// Adds a sent message to the statistics
-    pub fn add_sent(&mut self, msg: NetworkMessage) {
-        match msg {
-            NetworkMessage::INV(_) => self.inv.0 += 1,
-            NetworkMessage::GETDATA(_) => self.get_data.0 += 1,
-            NetworkMessage::TX(_) => self.tx.0 += 1,
-        }
-    }
-
-    /// Adds a receive message to the statistics
-    pub fn add_received(&mut self, msg: NetworkMessage) {
-        match msg {
-            NetworkMessage::INV(_) => self.inv.1 += 1,
-            NetworkMessage::GETDATA(_) => self.get_data.1 += 1,
-            NetworkMessage::TX(_) => self.tx.1 += 1,
-        }
-    }
-}
-
-impl std::fmt::Display for NodeStatistics {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "INVS: {}/{}. GETDATA: {}/{}. TX: {}/{}",
-            self.inv.0, self.inv.1, self.get_data.0, self.get_data.1, self.tx.0, self.tx.1,
-        )
     }
 }
 

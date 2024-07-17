@@ -1,10 +1,13 @@
 use crate::node::{Node, NodeId};
+use crate::statistics::NetworkStatistics;
 use crate::{TxId, MAX_OUTBOUND_CONNECTIONS};
 
 use std::collections::HashSet;
 
 use rand::distributions::{Distribution, Uniform};
 use rand::rngs::StdRng;
+
+const NET_MESSAGE_HEADER_SIZE: u32 = 4 + 12 + 4 + 4;
 
 /// Defines the collection of network messages that can be exchanged between peers
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
@@ -24,12 +27,14 @@ impl NetworkMessage {
     }
 
     /// Returns the size of the given network message
-    fn get_size(&self) -> u32 {
-        // FIXME: Add some sizes that make sense
+    pub fn get_size(&self) -> u32 {
         match self {
-            NetworkMessage::INV(_) => 32,
-            NetworkMessage::GETDATA(_) => 32,
-            NetworkMessage::TX(_) => 150,
+            // FIXME: This assumes that each INV contains a single txid
+            NetworkMessage::INV(_) => NET_MESSAGE_HEADER_SIZE + 32,
+            // FIXME: This assumes that each GETDATA contains a single txid
+            NetworkMessage::GETDATA(_) => NET_MESSAGE_HEADER_SIZE + 32,
+            // We are using 225 here as an approximation to the average size of a 1 in 2 out tx
+            NetworkMessage::TX(_) => NET_MESSAGE_HEADER_SIZE + 225,
         }
     }
 
@@ -64,6 +69,7 @@ impl std::fmt::Display for NetworkMessage {
 pub struct Network {
     /// Collection of nodes that composes the simulated network
     nodes: Vec<Node>,
+    reachable_count: usize,
 }
 
 impl Network {
@@ -105,7 +111,10 @@ impl Network {
         let mut nodes = reachable_nodes;
         nodes.extend(unreachable_nodes);
 
-        Self { nodes }
+        Self {
+            nodes,
+            reachable_count,
+        }
     }
 
     /// Connects a collection of unreachable nodes to a collection of reachable ones.
@@ -195,5 +204,33 @@ impl Network {
 
     pub fn get_nodes(&self) -> &Vec<Node> {
         &self.nodes
+    }
+
+    fn get_reachable_nodes(&self) -> &[Node] {
+        &self.nodes[0..self.reachable_count]
+    }
+
+    fn get_uneachable_nodes(&self) -> &[Node] {
+        &self.nodes[self.reachable_count..]
+    }
+
+    pub fn get_statistics(&self) -> NetworkStatistics {
+        let reachable_statistics = self
+            .get_reachable_nodes()
+            .iter()
+            .map(|x| x.get_statistics().clone())
+            .sum();
+        let unreachable_nodes = self.get_uneachable_nodes();
+        let unreachable_statistics = unreachable_nodes
+            .iter()
+            .map(|x| x.get_statistics().clone())
+            .sum();
+
+        NetworkStatistics::new(
+            reachable_statistics,
+            self.reachable_count,
+            unreachable_statistics,
+            unreachable_nodes.len(),
+        )
     }
 }

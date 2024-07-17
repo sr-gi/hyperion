@@ -2,6 +2,7 @@ pub mod graph;
 pub mod network;
 pub mod node;
 pub mod simulator;
+pub mod statistics;
 
 pub type TxId = u32;
 
