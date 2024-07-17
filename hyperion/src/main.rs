@@ -1,6 +1,7 @@
 use clap::Parser;
 use log::LevelFilter;
 use simple_logger::SimpleLogger;
+use std::time;
 
 use hyper_lib::simulator::{Event, Simulator};
 use hyperion::cli::Cli;
@@ -15,6 +16,7 @@ fn main() -> anyhow::Result<()> {
         .init()
         .unwrap();
 
+    let node_count = cli.reachable + cli.unreachable;
     let mut simulator = Simulator::new(cli.reachable, cli.unreachable, cli.seed);
 
     // Pick a (source) node to broadcast the target transaction from.
@@ -29,6 +31,11 @@ fn main() -> anyhow::Result<()> {
         simulator.add_event(event, time);
     }
 
+    // For statistical purposes
+    let mut nodes_reached = 1;
+    let mut percentile_time = 0;
+    let target_node_count = node_count as f32 * (cli.percentile_target as f32 / 100.0);
+
     // Process events until the queue is empty
     while let Some((event, time)) = simulator.get_next_event() {
         match event {
@@ -40,6 +47,12 @@ fn main() -> anyhow::Result<()> {
                     .get_next_announcement_time(time, peer_id);
             }
             Event::ReceiveMessageFrom(src, dst, msg) => {
+                if msg.is_tx() && percentile_time == 0 {
+                    nodes_reached += 1;
+                    if nodes_reached as f32 >= target_node_count {
+                        percentile_time = time;
+                    }
+                }
                 for (future_event, future_time) in simulator
                     .network
                     .get_node_mut(dst)
@@ -75,10 +88,29 @@ fn main() -> anyhow::Result<()> {
     // Make sure every node has received the transaction
     for node in simulator.network.get_nodes() {
         assert!(node.knows_transaction(&txid));
-        log::info!("Node {}: {}", node.get_id(), node.get_statistics());
     }
 
-    log::info!("Transaction has reached all nodes");
+    let statistics = simulator.network.get_statistics();
+    log::info!(
+        "Reachable nodes sent/received {}/{} messages ({}/{} bytes) (avg)",
+        statistics.avg_messages().sent_reachable(),
+        statistics.avg_messages().received_reachable(),
+        statistics.avg_bytes().sent_reachable(),
+        statistics.avg_bytes().received_reachable(),
+    );
+    log::info!(
+        "Unreachable nodes sent/received {}/{} messages ({}/{} bytes) (avg)",
+        statistics.avg_messages().sent_unreachable(),
+        statistics.avg_messages().received_unreachable(),
+        statistics.avg_bytes().sent_unreachable(),
+        statistics.avg_bytes().received_unreachable(),
+    );
+
+    log::info!(
+        "Transaction (txid: {txid:x}) reached {}% of nodes in the network in {}s",
+        cli.percentile_target,
+        time::Duration::from_nanos(percentile_time).as_secs_f32(),
+    );
 
     Ok(())
 }

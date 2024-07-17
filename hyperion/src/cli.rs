@@ -6,6 +6,8 @@ use log::LevelFilter;
 const UNREACHABLE_NODE_COUNT: usize = 100000;
 /// Default number of reachable nodes in the simulated network.
 const REACHABLE_NODE_COUNT: usize = (UNREACHABLE_NODE_COUNT as f32 * 0.1) as usize;
+/// Target for the transaction propagation statistics snapshot
+const TARGET_PERCENTILE: u16 = 90;
 
 #[derive(Parser)]
 #[command(version, about)]
@@ -23,6 +25,9 @@ pub struct Cli {
     /// Possible values: [off, error, warn, info, debug, trace]
     #[clap(long, short, verbatim_doc_comment, default_value = "info")]
     pub log_level: LevelFilter,
+    /// Target percentile of node the transaction needs to reach. Use to measure propagation times
+    #[clap(long, short, default_value_t = TARGET_PERCENTILE, value_parser = clap::value_parser!(u16).range(1..101))]
+    pub percentile_target: u16,
     /// Seed to run random activity generator deterministically
     #[clap(long, short)]
     pub seed: Option<u64>,
