@@ -2,61 +2,149 @@ use std::iter::Sum;
 
 use crate::network::NetworkMessage;
 
+#[derive(Clone)]
+struct Data {
+    from_inbounds: u32,
+    from_outbounds: u32,
+    to_inbounds: u32,
+    to_outbounds: u32,
+}
+
+impl Data {
+    pub fn new() -> Self {
+        Self {
+            from_inbounds: 0,
+            from_outbounds: 0,
+            to_inbounds: 0,
+            to_outbounds: 0,
+        }
+    }
+}
+
+impl Default for Data {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::ops::Add for Data {
+    type Output = Data;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self {
+            from_inbounds: self.from_inbounds + rhs.from_inbounds,
+            from_outbounds: self.from_outbounds + rhs.from_outbounds,
+            to_inbounds: self.to_inbounds + rhs.to_inbounds,
+            to_outbounds: self.to_outbounds + rhs.to_outbounds,
+        }
+    }
+}
+
 /// Statistics about how many messages of a certain type has a node sent/received
 #[derive(Clone)]
 pub struct NodeStatistics {
-    inv: (u32, u32),
-    get_data: (u32, u32),
-    tx: (u32, u32),
-    bytes_sent: u32,
-    bytes_received: u32,
+    inv: Data,
+    get_data: Data,
+    tx: Data,
+    bytes: Data,
 }
 
 impl NodeStatistics {
     pub fn new() -> Self {
         NodeStatistics {
-            inv: (0, 0),
-            get_data: (0, 0),
-            tx: (0, 0),
-            bytes_sent: 0,
-            bytes_received: 0,
+            inv: Data::new(),
+            get_data: Data::new(),
+            tx: Data::new(),
+            bytes: Data::new(),
         }
     }
 
     /// Adds a sent message to the statistics
-    pub fn add_sent(&mut self, msg: NetworkMessage) {
+    pub fn add_sent(&mut self, msg: NetworkMessage, to_inbound: bool) {
+        let (to, bytes) = if to_inbound {
+            (&mut self.inv.to_inbounds, &mut self.bytes.to_inbounds)
+        } else {
+            (&mut self.inv.to_outbounds, &mut self.bytes.to_outbounds)
+        };
         match msg {
-            NetworkMessage::INV(_) => self.inv.0 += 1,
-            NetworkMessage::GETDATA(_) => self.get_data.0 += 1,
-            NetworkMessage::TX(_) => self.tx.0 += 1,
+            NetworkMessage::INV(_) => *to += 1,
+            NetworkMessage::GETDATA(_) => *to += 1,
+            NetworkMessage::TX(_) => *to += 1,
         }
-        self.bytes_sent += msg.get_size();
+        *bytes += msg.get_size();
     }
 
     /// Adds a receive message to the statistics
-    pub fn add_received(&mut self, msg: NetworkMessage) {
+    pub fn add_received(&mut self, msg: NetworkMessage, from_inbound: bool) {
+        let (from, bytes) = if from_inbound {
+            (&mut self.inv.from_inbounds, &mut self.bytes.from_inbounds)
+        } else {
+            (&mut self.inv.from_outbounds, &mut self.bytes.from_outbounds)
+        };
         match msg {
-            NetworkMessage::INV(_) => self.inv.1 += 1,
-            NetworkMessage::GETDATA(_) => self.get_data.1 += 1,
-            NetworkMessage::TX(_) => self.tx.1 += 1,
+            NetworkMessage::INV(_) => *from += 1,
+            NetworkMessage::GETDATA(_) => *from += 1,
+            NetworkMessage::TX(_) => *from += 1,
         }
-        self.bytes_received += msg.get_size();
+        *bytes += msg.get_size();
     }
 
     pub fn get_sent_count(&self) -> u32 {
-        self.inv.0 + self.get_data.0 + self.tx.0
+        self.inv.to_inbounds
+            + self.inv.to_outbounds
+            + self.get_data.to_inbounds
+            + self.get_data.to_outbounds
+            + self.tx.to_inbounds
+            + self.tx.to_outbounds
+    }
+
+    pub fn get_sent_to_inbounds_count(&self) -> u32 {
+        self.inv.to_inbounds + self.get_data.to_inbounds + self.tx.to_inbounds
+    }
+
+    pub fn get_sent_to_outbounds_count(&self) -> u32 {
+        self.inv.to_outbounds + self.get_data.to_outbounds + self.tx.to_outbounds
     }
 
     pub fn get_received_count(&self) -> u32 {
-        self.inv.1 + self.get_data.1 + self.tx.1
+        self.inv.from_inbounds
+            + self.inv.from_outbounds
+            + self.get_data.from_inbounds
+            + self.get_data.from_outbounds
+            + self.tx.from_inbounds
+            + self.tx.from_outbounds
+    }
+
+    pub fn get_received_from_inbounds_count(&self) -> u32 {
+        self.inv.from_inbounds + self.get_data.from_inbounds + self.tx.from_inbounds
+    }
+
+    pub fn get_received_from_outbounds_count(&self) -> u32 {
+        self.inv.from_outbounds + self.get_data.from_outbounds + self.tx.from_outbounds
     }
 
     pub fn get_sent_bytes(&self) -> u32 {
-        self.bytes_sent
+        self.bytes.to_inbounds + self.bytes.to_outbounds
+    }
+
+    pub fn get_sent_to_inbounds_bytes(&self) -> u32 {
+        self.bytes.to_inbounds
+    }
+
+    pub fn get_sent_to_outbounds_bytes(&self) -> u32 {
+        self.bytes.to_outbounds
     }
 
     pub fn get_received_bytes(&self) -> u32 {
-        self.bytes_received
+        self.bytes.from_inbounds + self.bytes.from_outbounds
+    }
+
+    pub fn get_received_from_outbounds_bytes(&self) -> u32 {
+        self.bytes.from_outbounds
+    }
+
+    pub fn get_received_from_inbounds_bytes(&self) -> u32 {
+        self.bytes.from_inbounds
     }
 }
 
@@ -66,32 +154,20 @@ impl Default for NodeStatistics {
     }
 }
 
-impl std::fmt::Display for NodeStatistics {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "INVS: {}/{}. GETDATA: {}/{}. TX: {}/{}",
-            self.inv.0, self.inv.1, self.get_data.0, self.get_data.1, self.tx.0, self.tx.1,
-        )
-    }
-}
-
 impl Sum for NodeStatistics {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.fold(
             NodeStatistics {
-                inv: (0, 0),
-                get_data: (0, 0),
-                tx: (0, 0),
-                bytes_sent: 0,
-                bytes_received: 0,
+                inv: Data::new(),
+                get_data: Data::new(),
+                tx: Data::new(),
+                bytes: Data::new(),
             },
             |a, b| NodeStatistics {
-                inv: (a.inv.0 + b.inv.0, a.inv.1 + b.inv.1),
-                get_data: (a.get_data.0 + b.get_data.0, a.get_data.1 + b.get_data.1),
-                tx: (a.tx.0 + b.tx.0, a.tx.1 + b.tx.1),
-                bytes_sent: a.bytes_sent + b.bytes_sent,
-                bytes_received: a.bytes_received + b.bytes_received,
+                inv: (a.inv + b.inv),
+                get_data: (a.get_data + b.get_data),
+                tx: (a.tx + b.tx),
+                bytes: a.bytes + b.bytes,
             },
         )
     }
@@ -100,27 +176,27 @@ impl Sum for NodeStatistics {
 pub type AccumulatedStatistics = NodeStatistics;
 
 pub struct AveragedStatistics {
-    avg_sent_reachable: f32,
-    avg_received_reachable: f32,
-    avg_sent_unreachable: f32,
-    avg_received_unreachable: f32,
+    sent_reachable: f32,
+    received_reachable: f32,
+    sent_unreachable: f32,
+    received_unreachable: f32,
 }
 
 impl AveragedStatistics {
     pub fn sent_reachable(&self) -> f32 {
-        self.avg_sent_reachable
+        self.sent_reachable
     }
 
     pub fn received_reachable(&self) -> f32 {
-        self.avg_received_reachable
+        self.received_reachable
     }
 
     pub fn sent_unreachable(&self) -> f32 {
-        self.avg_sent_unreachable
+        self.sent_unreachable
     }
 
     pub fn received_unreachable(&self) -> f32 {
-        self.avg_received_unreachable
+        self.received_unreachable
     }
 }
 
@@ -148,26 +224,26 @@ impl NetworkStatistics {
 
     pub fn avg_messages(&self) -> AveragedStatistics {
         AveragedStatistics {
-            avg_sent_reachable: self.reachable_stats.get_sent_count() as f32
+            sent_reachable: self.reachable_stats.get_sent_count() as f32
                 / self.reachable_count as f32,
-            avg_received_reachable: self.reachable_stats.get_received_count() as f32
+            received_reachable: self.reachable_stats.get_received_count() as f32
                 / self.reachable_count as f32,
-            avg_sent_unreachable: self.unreachable_stats.get_sent_count() as f32
+            sent_unreachable: self.unreachable_stats.get_sent_count() as f32
                 / self.unreachable_count as f32,
-            avg_received_unreachable: self.unreachable_stats.get_received_count() as f32
+            received_unreachable: self.unreachable_stats.get_received_count() as f32
                 / self.unreachable_count as f32,
         }
     }
 
     pub fn avg_bytes(&self) -> AveragedStatistics {
         AveragedStatistics {
-            avg_sent_reachable: self.reachable_stats.get_sent_bytes() as f32
+            sent_reachable: self.reachable_stats.get_sent_bytes() as f32
                 / self.reachable_count as f32,
-            avg_received_reachable: self.reachable_stats.get_received_bytes() as f32
+            received_reachable: self.reachable_stats.get_received_bytes() as f32
                 / self.reachable_count as f32,
-            avg_sent_unreachable: self.unreachable_stats.get_sent_bytes() as f32
+            sent_unreachable: self.unreachable_stats.get_sent_bytes() as f32
                 / self.unreachable_count as f32,
-            avg_received_unreachable: self.unreachable_stats.get_received_bytes() as f32
+            received_unreachable: self.unreachable_stats.get_received_bytes() as f32
                 / self.unreachable_count as f32,
         }
     }

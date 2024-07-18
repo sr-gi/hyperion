@@ -385,7 +385,7 @@ impl Node {
                 self.requested_transactions.insert(txid);
 
                 let msg = NetworkMessage::GETDATA(txid);
-                self.node_statistics.add_sent(msg);
+                self.node_statistics.add_sent(msg, true);
                 return Some((
                     Event::receive_message_from(self.node_id, peer_id, msg),
                     request_time,
@@ -467,7 +467,8 @@ impl Node {
         // message event for a peer
         if let Some((event, _)) = &message {
             if event.is_receive_message() {
-                self.node_statistics.add_sent(msg);
+                self.node_statistics
+                    .add_sent(msg, self.is_inbounds(&peer_id));
             }
         }
 
@@ -489,7 +490,8 @@ impl Node {
         );
         let we_know_tx = self.knows_transaction(msg.inner());
         let mut events = Vec::new();
-        self.node_statistics.add_received(msg);
+        self.node_statistics
+            .add_received(msg, self.is_inbounds(&peer_id));
 
         if let Some(peer) = self.get_peer_mut(&peer_id) {
             match msg {
