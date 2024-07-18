@@ -47,6 +47,8 @@ pub struct NodeStatistics {
     get_data: Data,
     tx: Data,
     bytes: Data,
+    inbounds_count: u32,
+    outbounds_count: u32,
 }
 
 impl NodeStatistics {
@@ -56,7 +58,17 @@ impl NodeStatistics {
             get_data: Data::new(),
             tx: Data::new(),
             bytes: Data::new(),
+            inbounds_count: 0,
+            outbounds_count: 0,
         }
+    }
+
+    pub fn add_inbound(&mut self) {
+        self.inbounds_count += 1;
+    }
+
+    pub fn add_outbound(&mut self) {
+        self.outbounds_count += 1;
     }
 
     /// Adds a sent message to the statistics
@@ -162,12 +174,16 @@ impl Sum for NodeStatistics {
                 get_data: Data::new(),
                 tx: Data::new(),
                 bytes: Data::new(),
+                inbounds_count: 0,
+                outbounds_count: 0,
             },
             |a, b| NodeStatistics {
                 inv: (a.inv + b.inv),
                 get_data: (a.get_data + b.get_data),
                 tx: (a.tx + b.tx),
                 bytes: a.bytes + b.bytes,
+                inbounds_count: a.inbounds_count + b.inbounds_count,
+                outbounds_count: a.outbounds_count + b.outbounds_count,
             },
         )
     }
@@ -246,5 +262,58 @@ impl NetworkStatistics {
             received_unreachable: self.unreachable_stats.get_received_bytes() as f32
                 / self.unreachable_count as f32,
         }
+    }
+
+    pub fn from_reachable_to_outbounds(&self) -> (f32, f32) {
+        (
+            self.reachable_stats.get_sent_to_outbounds_count() as f32
+                / self.reachable_stats.outbounds_count as f32,
+            self.reachable_stats.get_sent_to_outbounds_bytes() as f32
+                / self.reachable_stats.outbounds_count as f32,
+        )
+    }
+
+    pub fn from_reachable_by_outbounds(&self) -> (f32, f32) {
+        (
+            self.reachable_stats.get_received_from_outbounds_count() as f32
+                / self.reachable_stats.outbounds_count as f32,
+            self.reachable_stats.get_received_from_outbounds_bytes() as f32
+                / self.reachable_stats.outbounds_count as f32,
+        )
+    }
+
+    pub fn from_reachable_to_inbounds(&self) -> (f32, f32) {
+        (
+            self.reachable_stats.get_sent_to_inbounds_count() as f32
+                / self.reachable_stats.inbounds_count as f32,
+            self.reachable_stats.get_sent_to_inbounds_bytes() as f32
+                / self.reachable_stats.inbounds_count as f32,
+        )
+    }
+
+    pub fn from_reachable_by_inbounds(&self) -> (f32, f32) {
+        (
+            self.reachable_stats.get_received_from_inbounds_count() as f32
+                / self.reachable_stats.inbounds_count as f32,
+            self.reachable_stats.get_received_from_inbounds_bytes() as f32
+                / self.reachable_stats.inbounds_count as f32,
+        )
+    }
+
+    pub fn from_unreachable_to_outbounds(&self) -> (f32, f32) {
+        (
+            self.unreachable_stats.get_sent_to_outbounds_count() as f32
+                / self.unreachable_stats.outbounds_count as f32,
+            self.unreachable_stats.get_sent_to_outbounds_bytes() as f32
+                / self.unreachable_stats.outbounds_count as f32,
+        )
+    }
+    pub fn from_unreachable_by_outbounds(&self) -> (f32, f32) {
+        (
+            self.unreachable_stats.get_received_from_outbounds_count() as f32
+                / self.unreachable_stats.outbounds_count as f32,
+            self.unreachable_stats.get_received_from_outbounds_bytes() as f32
+                / self.unreachable_stats.outbounds_count as f32,
+        )
     }
 }

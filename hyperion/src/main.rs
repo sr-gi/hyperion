@@ -98,12 +98,55 @@ fn main() -> anyhow::Result<()> {
         statistics.avg_bytes().sent_reachable(),
         statistics.avg_bytes().received_reachable(),
     );
+    let (s, r) = (
+        statistics.from_reachable_to_outbounds(),
+        statistics.from_reachable_by_outbounds(),
+    );
+    log::info!(
+        "\t{} messages ({} bytes) were sent to outbound (avg)",
+        s.0,
+        s.1
+    );
+    log::info!(
+        "\t{} messages ({} bytes) were received from outbound (avg)",
+        r.0,
+        r.1
+    );
+    let (s, r) = (
+        statistics.from_reachable_to_inbounds(),
+        statistics.from_reachable_by_inbounds(),
+    );
+    log::info!(
+        "\t{} messages ({} bytes) were sent to inbounds (avg)",
+        s.0,
+        s.1
+    );
+    log::info!(
+        "\t{} messages ({} bytes) were received from inbounds (avg)",
+        r.0,
+        r.1
+    );
+
     log::info!(
         "Unreachable nodes sent/received {}/{} messages ({}/{} bytes) (avg)",
         statistics.avg_messages().sent_unreachable(),
         statistics.avg_messages().received_unreachable(),
         statistics.avg_bytes().sent_unreachable(),
         statistics.avg_bytes().received_unreachable(),
+    );
+    let (s, r) = (
+        statistics.from_unreachable_to_outbounds(),
+        statistics.from_unreachable_by_outbounds(),
+    );
+    log::info!(
+        "\t{} messages ({} bytes) were sent to outbounds (avg)",
+        s.0,
+        s.1
+    );
+    log::info!(
+        "\t{} messages ({} bytes) were received from outbounds (avg)",
+        r.0,
+        r.1
     );
 
     log::info!(
