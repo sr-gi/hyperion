@@ -272,18 +272,10 @@ impl Node {
             );
             // Schedule the announcement to go off on the next trickle for the given peer
             events.push((self.schedule_announcement(peer_id, txid), next_interval));
-            events.push((
-                Event::sample_new_interval(self.node_id, Some(peer_id)),
-                next_interval,
-            ));
         }
 
         // For inbounds we use a shared interval
         let next_interval = self.get_next_announcement_time(current_time, None);
-        events.push((
-            Event::sample_new_interval(self.node_id, None),
-            next_interval,
-        ));
         for peer_id in self.in_peers.keys().cloned().collect::<Vec<_>>() {
             events.push((self.schedule_announcement(peer_id, txid), next_interval));
         }

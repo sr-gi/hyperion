@@ -39,13 +39,6 @@ fn main() -> anyhow::Result<()> {
     // Process events until the queue is empty
     while let Some((event, time)) = simulator.get_next_event() {
         match event {
-            Event::SampleNewInterval(target, peer_id) => {
-                simulator
-                    .network
-                    .get_node_mut(target)
-                    .unwrap()
-                    .get_next_announcement_time(time, peer_id);
-            }
             Event::ReceiveMessageFrom(src, dst, msg) => {
                 if msg.is_tx() && percentile_time == 0 {
                     nodes_reached += 1;

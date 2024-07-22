@@ -15,8 +15,6 @@ static NET_DELAY_MEAN: f64 = 0.01 * SECS_TO_NANOS as f64; // 10ms
 /// An enumeration of all the events that can be created in a simulation
 #[derive(Clone, Hash, Eq, PartialEq)]
 pub enum Event {
-    /// Sample a new time interval for a given node (or for all inbounds if node id is provided)
-    SampleNewInterval(NodeId, Option<NodeId>),
     /// The destination (0) receives a new message (2) from given source (1)
     ReceiveMessageFrom(NodeId, NodeId, NetworkMessage),
     /// A given node (0) processes an scheduled announcements (2) to a given peer (1)
@@ -26,10 +24,6 @@ pub enum Event {
 }
 
 impl Event {
-    pub fn sample_new_interval(target: NodeId, peer_id: Option<NodeId>) -> Self {
-        Event::SampleNewInterval(target, peer_id)
-    }
-
     pub fn receive_message_from(src: NodeId, dst: NodeId, msg: NetworkMessage) -> Self {
         Event::ReceiveMessageFrom(src, dst, msg)
     }
