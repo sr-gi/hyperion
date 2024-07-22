@@ -55,12 +55,12 @@ fn main() -> anyhow::Result<()> {
                     simulator.add_event(future_event, future_time);
                 }
             }
-            Event::ProcessScheduledAnnouncement(src, dst, txid) => {
+            Event::ProcessScheduledAnnouncement(src, dst) => {
                 if let Some((scheduled_event, t)) = simulator
                     .network
                     .get_node_mut(src)
                     .unwrap()
-                    .process_scheduled_announcement(dst, txid, time)
+                    .process_scheduled_announcement(dst, time)
                 {
                     simulator.add_event(scheduled_event, t);
                 }
