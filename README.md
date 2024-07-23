@@ -15,9 +15,9 @@ Nodes in the simulator are well behaved, that is, all nodes follow the transacti
 The node transaction relaying logic follows Bitcoin Core's design:
 
 - `INVs` are sent to peers on random intervals based on whether a peer is inbound or outbound:
-    - For inbounds, the delay follows a poisson process with expected value of `INBOUND_INVENTORY_BROADCAST_INTERVAL(5s)`. All inbounds are on the same timer
-    - For outbounds, the delay follows a poisson process with expected value of `OUTBOUND_INVENTORY_BROADCAST_INTERVAL(2s)`. Every outbound has a unique timer
-- `GETDATA` are prioritized to outbound peers, hence if an inbound peer announces a transaction, the request will be
+    - For inbounds, the delay follows a Poisson process with an expected value of `INBOUND_INVENTORY_BROADCAST_INTERVAL(5s)`. All inbounds are on the same timer
+    - For outbounds, the delay follows a Poisson process with an expected value of `OUTBOUND_INVENTORY_BROADCAST_INTERVAL(2s)`. Every outbound has a unique timer
+- `GETDATA`s are prioritized to outbound peers, hence if an inbound peer announces a transaction, the request will be
 delayed by `NONPREF_PEER_TX_DELAY(2s)`, and superseded by any other request by an outbound peer<sup>1</sup>
 
 All messages exchanged between peers are added some network latency, which is sampled at random from a Log Normal distribution with expected value of `10ms` and variance of `2ms`.
