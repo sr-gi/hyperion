@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::{hash_map::Entry, HashMap, HashSet};
 
 use rand::rngs::StdRng;
@@ -38,8 +39,8 @@ impl PoissonTimer {
 
     /// Sample a new value from the distribution. Return values are
     /// represented as nanoseconds
-    pub fn sample(&mut self, rng: &mut StdRng) -> u64 {
-        (self.dist.sample(rng) * SECS_TO_NANOS as f64).round() as u64
+    pub fn sample(&mut self, rng: &RefCell<StdRng>) -> u64 {
+        (self.dist.sample(&mut *rng.borrow_mut()) * SECS_TO_NANOS as f64).round() as u64
     }
 }
 
@@ -96,7 +97,7 @@ pub struct Node {
     /// The (global) node identifier
     node_id: NodeId,
     /// A pre-seeded rng to allow reproducing previous simulation results
-    rng: StdRng,
+    rng: RefCell<StdRng>,
     /// Whether the node is reachable or not
     is_reachable: bool,
     /// Map of inbound peers identified by their (global) node identifier
@@ -118,7 +119,7 @@ pub struct Node {
 }
 
 impl Node {
-    pub fn new(node_id: NodeId, rng: StdRng, is_reachable: bool) -> Self {
+    pub fn new(node_id: NodeId, rng: RefCell<StdRng>, is_reachable: bool) -> Self {
         Node {
             node_id,
             rng,
@@ -169,7 +170,7 @@ impl Node {
                     peer_id.unwrap()
                 );
             }
-            poisson_timer.next_interval = current_time + poisson_timer.sample(&mut self.rng);
+            poisson_timer.next_interval = current_time + poisson_timer.sample(&self.rng);
         }
         poisson_timer.next_interval
     }

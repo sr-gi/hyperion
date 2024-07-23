@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::hash::Hash;
 
@@ -53,7 +54,7 @@ impl Event {
 
 pub struct Simulator {
     /// A pre-seeded rng to allow reproducing previous simulation results
-    rng: StdRng,
+    rng: RefCell<StdRng>,
     /// A function used to generate network delays. Follows a LogNormal distribution over a given value
     net_delay_fn: LogNormal<f64>,
     /// The simulated network
@@ -72,8 +73,8 @@ impl Simulator {
             log::info!("Using fresh rng seed: {}", s);
             s
         };
-        let mut rng: StdRng = StdRng::seed_from_u64(seed);
-        let network = Network::new(reachable_count, unreachable_count, &mut rng);
+        let rng = RefCell::new(StdRng::seed_from_u64(seed));
+        let network = Network::new(reachable_count, unreachable_count, &rng);
 
         // Create a network delay function for sent/received messages. This is in the order of
         // nanoseconds, using a LogNormal distribution with expected value NET_DELAY_MEAN, and
@@ -93,7 +94,10 @@ impl Simulator {
     /// These delays simulate the network transfer time for the given message
     pub fn add_event(&mut self, event: Event, mut time: u64) {
         if event.is_receive_message() {
-            time += self.net_delay_fn.sample(&mut self.rng).round() as u64;
+            time += self
+                .net_delay_fn
+                .sample(&mut *self.rng.borrow_mut())
+                .round() as u64;
         }
 
         self.event_queue.push(event, Reverse(time));
@@ -105,11 +109,13 @@ impl Simulator {
     }
 
     pub fn get_random_txid(&mut self) -> TxId {
-        self.rng.next_u32()
+        self.rng.borrow_mut().next_u32()
     }
 
     pub fn get_random_nodeid(&mut self) -> NodeId {
-        self.rng.gen_range(0..self.network.get_node_count())
+        self.rng
+            .borrow_mut()
+            .gen_range(0..self.network.get_node_count())
     }
 
     pub fn get_node(&self, node_id: NodeId) -> Option<&Node> {

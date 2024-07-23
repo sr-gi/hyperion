@@ -2,6 +2,7 @@ use crate::node::{Node, NodeId};
 use crate::statistics::NetworkStatistics;
 use crate::{TxId, MAX_OUTBOUND_CONNECTIONS};
 
+use std::cell::RefCell;
 use std::collections::HashSet;
 
 use rand::distributions::{Distribution, Uniform};
@@ -73,7 +74,7 @@ pub struct Network {
 }
 
 impl Network {
-    pub fn new(reachable_count: usize, unreachable_count: usize, rng: &mut StdRng) -> Self {
+    pub fn new(reachable_count: usize, unreachable_count: usize, rng: &RefCell<StdRng>) -> Self {
         let mut reachable_nodes = (0..reachable_count)
             .map(|i| Node::new(i, rng.clone(), true))
             .collect::<Vec<_>>();
@@ -123,7 +124,7 @@ impl Network {
     fn connect_unreachable(
         unreachable_nodes: &mut [Node],
         reachable_nodes: &mut [Node],
-        rng: &mut StdRng,
+        rng: &RefCell<StdRng>,
         dist: &Uniform<NodeId>,
     ) {
         for node in unreachable_nodes.iter_mut() {
@@ -144,7 +145,11 @@ impl Network {
     /// Connects a collection of reachable nodes between them.
     /// A given pair of nodes will have, at most, one connection between them.
     /// Nodes to be connected to are picked at random given an uniform distribution [dist]
-    fn connect_reachable(reachable_nodes: &mut [Node], rng: &mut StdRng, dist: &Uniform<NodeId>) {
+    fn connect_reachable(
+        reachable_nodes: &mut [Node],
+        rng: &RefCell<StdRng>,
+        dist: &Uniform<NodeId>,
+    ) {
         for node_id in 0..reachable_nodes.len() {
             let mut already_connected_to = reachable_nodes[node_id]
                 .get_inbounds()
@@ -178,12 +183,13 @@ impl Network {
     /// and an uniform distribution [dist]
     fn get_peer_to_connect(
         already_connected_to: &mut HashSet<NodeId>,
-        rng: &mut StdRng,
+        rng: &RefCell<StdRng>,
         dist: &Uniform<usize>,
     ) -> NodeId {
-        let mut peer_id = dist.sample(rng);
+        let mut r = rng.borrow_mut();
+        let mut peer_id = dist.sample(&mut *r);
         while already_connected_to.contains(&peer_id) {
-            peer_id = dist.sample(rng);
+            peer_id = dist.sample(&mut *r);
         }
         already_connected_to.insert(peer_id);
 
