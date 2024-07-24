@@ -4,35 +4,28 @@ use crate::{TxId, MAX_OUTBOUND_CONNECTIONS};
 
 use std::collections::HashSet;
 
+use itertools::Itertools;
 use rand::distributions::{Distribution, Uniform};
 use rand::rngs::StdRng;
 
-const NET_MESSAGE_HEADER_SIZE: u32 = 4 + 12 + 4 + 4;
+const NET_MESSAGE_HEADER_SIZE: usize = 4 + 12 + 4 + 4;
 
 /// Defines the collection of network messages that can be exchanged between peers
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum NetworkMessage {
-    INV(TxId),
-    GETDATA(TxId),
+    INV(Vec<TxId>),
+    GETDATA(Vec<TxId>),
     TX(TxId),
 }
 
 impl NetworkMessage {
-    pub fn inner(&self) -> &TxId {
-        match self {
-            NetworkMessage::INV(x) => x,
-            NetworkMessage::GETDATA(x) => x,
-            NetworkMessage::TX(x) => x,
-        }
-    }
-
     /// Returns the size of the given network message
-    pub fn get_size(&self) -> u32 {
+    pub fn get_size(&self) -> usize {
         match self {
-            // FIXME: This assumes that each INV contains a single txid
-            NetworkMessage::INV(_) => NET_MESSAGE_HEADER_SIZE + 32,
-            // FIXME: This assumes that each GETDATA contains a single txid
-            NetworkMessage::GETDATA(_) => NET_MESSAGE_HEADER_SIZE + 32,
+            // Number of entries (1 byte) + (type of entry + hash (4+32 bytes) * number of entries)
+            NetworkMessage::INV(x) => NET_MESSAGE_HEADER_SIZE + 1 + 36 * x.len(),
+            // Number of entries (1 byte) + (type of entry + hash (4+32 bytes) * number of entries)
+            NetworkMessage::GETDATA(x) => NET_MESSAGE_HEADER_SIZE + 36 * x.len(),
             // We are using 225 here as an approximation to the average size of a 1 in 2 out tx
             NetworkMessage::TX(_) => NET_MESSAGE_HEADER_SIZE + 225,
         }
@@ -56,13 +49,15 @@ impl NetworkMessage {
 
 impl std::fmt::Display for NetworkMessage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let (m, txid) = match self {
-            NetworkMessage::INV(x) => ("inv", x),
-            NetworkMessage::GETDATA(x) => ("getdata", x),
-            NetworkMessage::TX(x) => ("tx", x),
+        let (m, txs) = match self {
+            NetworkMessage::INV(x) => ("inv", format!("txids: [{:x}]", x.iter().format(", "))),
+            NetworkMessage::GETDATA(x) => {
+                ("getdata", format!("txids: [{:x}]", x.iter().format(", ")))
+            }
+            NetworkMessage::TX(x) => ("tx", format!("txid: {:x}", x)),
         };
 
-        write!(f, "{m}(txid: {txid:x})")
+        write!(f, "{m} ({txs})")
     }
 }
 

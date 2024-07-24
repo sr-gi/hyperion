@@ -60,7 +60,7 @@ impl NodeStatistics {
     }
 
     /// Adds a sent message to the statistics
-    pub fn add_sent(&mut self, msg: NetworkMessage, to_inbound: bool) {
+    pub fn add_sent(&mut self, msg: &NetworkMessage, to_inbound: bool) {
         let (to, bytes) = if to_inbound {
             (&mut self.inv.to_inbounds, &mut self.bytes.to_inbounds)
         } else {
@@ -71,11 +71,11 @@ impl NodeStatistics {
             NetworkMessage::GETDATA(_) => *to += 1,
             NetworkMessage::TX(_) => *to += 1,
         }
-        *bytes += msg.get_size();
+        *bytes += msg.get_size() as u32;
     }
 
     /// Adds a receive message to the statistics
-    pub fn add_received(&mut self, msg: NetworkMessage, from_inbound: bool) {
+    pub fn add_received(&mut self, msg: &NetworkMessage, from_inbound: bool) {
         let (from, bytes) = if from_inbound {
             (&mut self.inv.from_inbounds, &mut self.bytes.from_inbounds)
         } else {
@@ -86,7 +86,7 @@ impl NodeStatistics {
             NetworkMessage::GETDATA(_) => *from += 1,
             NetworkMessage::TX(_) => *from += 1,
         }
-        *bytes += msg.get_size();
+        *bytes += msg.get_size() as u32;
     }
 
     pub fn get_sent_count(&self) -> u32 {

@@ -15,31 +15,25 @@ static NET_DELAY_MEAN: f64 = 0.01 * SECS_TO_NANOS as f64; // 10ms
 /// An enumeration of all the events that can be created in a simulation
 #[derive(Clone, Hash, Eq, PartialEq)]
 pub enum Event {
-    /// Sample a new time interval for a given node (or for all inbounds if node id is provided)
-    SampleNewInterval(NodeId, Option<NodeId>),
     /// The destination (0) receives a new message (2) from given source (1)
     ReceiveMessageFrom(NodeId, NodeId, NetworkMessage),
-    /// A given node (0) processes an scheduled announcements (2) to a given peer (1)
-    ProcessScheduledAnnouncement(NodeId, NodeId, TxId),
+    /// A given node (0) processes an scheduled announcements to a given peer (1)
+    ProcessScheduledAnnouncement(NodeId, NodeId),
     /// A given node (0) processed a delayed request of a give transaction (1)
-    ProcessDelayedRequest(NodeId, TxId),
+    ProcessDelayedRequest(NodeId, NodeId),
 }
 
 impl Event {
-    pub fn sample_new_interval(target: NodeId, peer_id: Option<NodeId>) -> Self {
-        Event::SampleNewInterval(target, peer_id)
-    }
-
     pub fn receive_message_from(src: NodeId, dst: NodeId, msg: NetworkMessage) -> Self {
         Event::ReceiveMessageFrom(src, dst, msg)
     }
 
-    pub fn process_delayed_announcement(src: NodeId, dst: NodeId, txid: TxId) -> Self {
-        Event::ProcessScheduledAnnouncement(src, dst, txid)
+    pub fn process_scheduled_announcement(src: NodeId, dst: NodeId) -> Self {
+        Event::ProcessScheduledAnnouncement(src, dst)
     }
 
-    pub fn process_delayed_request(src: NodeId, txid: TxId) -> Self {
-        Event::ProcessDelayedRequest(src, txid)
+    pub fn process_delayed_request(src: NodeId, dst: NodeId) -> Self {
+        Event::ProcessDelayedRequest(src, dst)
     }
 
     pub fn is_receive_message(&self) -> bool {
@@ -48,6 +42,13 @@ impl Event {
 
     pub fn is_delayed_request(&self) -> bool {
         matches!(self, Event::ProcessDelayedRequest(..))
+    }
+
+    pub fn get_message(&self) -> Option<&NetworkMessage> {
+        match self {
+            Event::ReceiveMessageFrom(_, _, m) => Some(m),
+            _ => None,
+        }
     }
 }
 
