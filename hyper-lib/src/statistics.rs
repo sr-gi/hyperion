@@ -61,31 +61,37 @@ impl NodeStatistics {
 
     /// Adds a sent message to the statistics
     pub fn add_sent(&mut self, msg: &NetworkMessage, to_inbound: bool) {
-        let (to, bytes) = if to_inbound {
-            (&mut self.inv.to_inbounds, &mut self.bytes.to_inbounds)
-        } else {
-            (&mut self.inv.to_outbounds, &mut self.bytes.to_outbounds)
+        let data_ref = match msg {
+            NetworkMessage::INV(_) => &mut self.inv,
+            NetworkMessage::GETDATA(_) => &mut self.get_data,
+            NetworkMessage::TX(_) => &mut self.tx,
         };
-        match msg {
-            NetworkMessage::INV(_) => *to += 1,
-            NetworkMessage::GETDATA(_) => *to += 1,
-            NetworkMessage::TX(_) => *to += 1,
-        }
+
+        let (to, bytes) = if to_inbound {
+            (&mut data_ref.to_inbounds, &mut self.bytes.to_inbounds)
+        } else {
+            (&mut data_ref.to_outbounds, &mut self.bytes.to_outbounds)
+        };
+
+        *to += 1;
         *bytes += msg.get_size() as u32;
     }
 
     /// Adds a receive message to the statistics
     pub fn add_received(&mut self, msg: &NetworkMessage, from_inbound: bool) {
-        let (from, bytes) = if from_inbound {
-            (&mut self.inv.from_inbounds, &mut self.bytes.from_inbounds)
-        } else {
-            (&mut self.inv.from_outbounds, &mut self.bytes.from_outbounds)
+        let data_ref = match msg {
+            NetworkMessage::INV(_) => &mut self.inv,
+            NetworkMessage::GETDATA(_) => &mut self.get_data,
+            NetworkMessage::TX(_) => &mut self.tx,
         };
-        match msg {
-            NetworkMessage::INV(_) => *from += 1,
-            NetworkMessage::GETDATA(_) => *from += 1,
-            NetworkMessage::TX(_) => *from += 1,
-        }
+
+        let (from, bytes) = if from_inbound {
+            (&mut data_ref.from_inbounds, &mut self.bytes.from_inbounds)
+        } else {
+            (&mut data_ref.from_outbounds, &mut self.bytes.from_outbounds)
+        };
+
+        *from += 1;
         *bytes += msg.get_size() as u32;
     }
 
