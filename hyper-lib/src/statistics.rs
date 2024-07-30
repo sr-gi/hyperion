@@ -46,6 +46,9 @@ pub struct NodeStatistics {
     inv: Data,
     get_data: Data,
     tx: Data,
+    reqrecon: Data,
+    sketch: Data,
+    reconcildiff: Data,
     bytes: Data,
 }
 
@@ -56,21 +59,33 @@ impl NodeStatistics {
             get_data: Data::new(),
             tx: Data::new(),
             bytes: Data::new(),
+            reqrecon: Data::new(),
+            sketch: Data::new(),
+            reconcildiff: Data::new(),
         }
     }
 
-    /// Adds a sent message to the statistics
-    pub fn add_sent(&mut self, msg: &NetworkMessage, to_inbound: bool) {
+    fn get_data_ref(&mut self, msg: &NetworkMessage) -> (&mut Data, &mut Data) {
         let data_ref = match msg {
             NetworkMessage::INV(_) => &mut self.inv,
             NetworkMessage::GETDATA(_) => &mut self.get_data,
             NetworkMessage::TX(_) => &mut self.tx,
+            NetworkMessage::REQRECON(_) => &mut self.reqrecon,
+            NetworkMessage::SKETCH(_) => &mut self.sketch,
+            NetworkMessage::RECONCILDIFF(_) => &mut self.reconcildiff,
         };
 
+        (data_ref, &mut self.bytes)
+    }
+
+    /// Adds a sent message to the statistics
+    pub fn add_sent(&mut self, msg: &NetworkMessage, to_inbound: bool) {
+        let d_ref = self.get_data_ref(msg);
+
         let (to, bytes) = if to_inbound {
-            (&mut data_ref.to_inbounds, &mut self.bytes.to_inbounds)
+            (&mut d_ref.0.to_inbounds, &mut d_ref.1.to_inbounds)
         } else {
-            (&mut data_ref.to_outbounds, &mut self.bytes.to_outbounds)
+            (&mut d_ref.0.to_outbounds, &mut d_ref.1.to_outbounds)
         };
 
         *to += 1;
@@ -79,16 +94,12 @@ impl NodeStatistics {
 
     /// Adds a receive message to the statistics
     pub fn add_received(&mut self, msg: &NetworkMessage, from_inbound: bool) {
-        let data_ref = match msg {
-            NetworkMessage::INV(_) => &mut self.inv,
-            NetworkMessage::GETDATA(_) => &mut self.get_data,
-            NetworkMessage::TX(_) => &mut self.tx,
-        };
+        let d_ref = self.get_data_ref(msg);
 
         let (from, bytes) = if from_inbound {
-            (&mut data_ref.from_inbounds, &mut self.bytes.from_inbounds)
+            (&mut d_ref.0.from_inbounds, &mut d_ref.1.from_inbounds)
         } else {
-            (&mut data_ref.from_outbounds, &mut self.bytes.from_outbounds)
+            (&mut d_ref.0.from_outbounds, &mut d_ref.1.from_outbounds)
         };
 
         *from += 1;
@@ -102,14 +113,30 @@ impl NodeStatistics {
             + self.get_data.to_outbounds
             + self.tx.to_inbounds
             + self.tx.to_outbounds
+            + self.reqrecon.to_inbounds
+            + self.reqrecon.to_outbounds
+            + self.sketch.to_inbounds
+            + self.sketch.to_outbounds
+            + self.reconcildiff.to_inbounds
+            + self.reconcildiff.to_outbounds
     }
 
     pub fn get_sent_to_inbounds_count(&self) -> u32 {
-        self.inv.to_inbounds + self.get_data.to_inbounds + self.tx.to_inbounds
+        self.inv.to_inbounds
+            + self.get_data.to_inbounds
+            + self.tx.to_inbounds
+            + self.reqrecon.to_inbounds
+            + self.sketch.to_inbounds
+            + self.reconcildiff.to_inbounds
     }
 
     pub fn get_sent_to_outbounds_count(&self) -> u32 {
-        self.inv.to_outbounds + self.get_data.to_outbounds + self.tx.to_outbounds
+        self.inv.to_outbounds
+            + self.get_data.to_outbounds
+            + self.tx.to_outbounds
+            + self.reqrecon.to_outbounds
+            + self.sketch.to_outbounds
+            + self.reconcildiff.to_outbounds
     }
 
     pub fn get_received_count(&self) -> u32 {
@@ -119,14 +146,30 @@ impl NodeStatistics {
             + self.get_data.from_outbounds
             + self.tx.from_inbounds
             + self.tx.from_outbounds
+            + self.reqrecon.from_inbounds
+            + self.reqrecon.from_outbounds
+            + self.sketch.from_inbounds
+            + self.sketch.from_outbounds
+            + self.reconcildiff.from_inbounds
+            + self.reconcildiff.from_outbounds
     }
 
     pub fn get_received_from_inbounds_count(&self) -> u32 {
-        self.inv.from_inbounds + self.get_data.from_inbounds + self.tx.from_inbounds
+        self.inv.from_inbounds
+            + self.get_data.from_inbounds
+            + self.tx.from_inbounds
+            + self.reqrecon.from_inbounds
+            + self.sketch.from_inbounds
+            + self.reconcildiff.from_inbounds
     }
 
     pub fn get_received_from_outbounds_count(&self) -> u32 {
-        self.inv.from_outbounds + self.get_data.from_outbounds + self.tx.from_outbounds
+        self.inv.from_outbounds
+            + self.get_data.from_outbounds
+            + self.tx.from_outbounds
+            + self.reqrecon.from_outbounds
+            + self.sketch.from_outbounds
+            + self.reconcildiff.from_outbounds
     }
 
     pub fn get_sent_bytes(&self) -> u32 {
@@ -167,12 +210,18 @@ impl Sum for NodeStatistics {
                 inv: Data::new(),
                 get_data: Data::new(),
                 tx: Data::new(),
+                reqrecon: Data::new(),
+                sketch: Data::new(),
+                reconcildiff: Data::new(),
                 bytes: Data::new(),
             },
             |a, b| NodeStatistics {
                 inv: (a.inv + b.inv),
                 get_data: (a.get_data + b.get_data),
                 tx: (a.tx + b.tx),
+                reqrecon: (a.reqrecon + b.reqrecon),
+                sketch: (a.sketch + b.sketch),
+                reconcildiff: (a.reconcildiff + b.reconcildiff),
                 bytes: a.bytes + b.bytes,
             },
         )

@@ -1,5 +1,6 @@
 use crate::node::{Node, NodeId};
 use crate::statistics::NetworkStatistics;
+use crate::txreconciliation::Sketch;
 use crate::{TxId, MAX_OUTBOUND_CONNECTIONS};
 
 use std::collections::HashSet;
@@ -16,6 +17,12 @@ pub enum NetworkMessage {
     INV(Vec<TxId>),
     GETDATA(Vec<TxId>),
     TX(TxId),
+    // This is a hack. Reqrecon does not include a collection of txids (that'd defuse the purpose of Erlay). However,
+    // for simulation purposes we need to estimate the set difference (q). A workaround for that is letting the peer
+    // know what we know so it can be always perfectly "predicted", and scale it to a chosen factor later on if we chose to
+    REQRECON(Vec<TxId>),
+    SKETCH(Sketch),
+    RECONCILDIFF(Vec<TxId>),
 }
 
 impl NetworkMessage {
@@ -28,6 +35,12 @@ impl NetworkMessage {
             NetworkMessage::GETDATA(x) => NET_MESSAGE_HEADER_SIZE + 36 * x.len(),
             // We are using 225 here as an approximation to the average size of a 1 in 2 out tx
             NetworkMessage::TX(_) => NET_MESSAGE_HEADER_SIZE + 225,
+            // Set size + q, both 16-bit values. Notice here the inner value of the message is not taken into
+            // account, given that is just a hack used by the simulator to perfectly predict q
+            NetworkMessage::REQRECON(_) => NET_MESSAGE_HEADER_SIZE + 2 + 2,
+            NetworkMessage::SKETCH(s) => NET_MESSAGE_HEADER_SIZE + s.get_size(),
+            // success (1 byte) + ask_shortids (n bytes, depending on the number of missing transactions, 8 bytes per item)
+            NetworkMessage::RECONCILDIFF(d) => NET_MESSAGE_HEADER_SIZE + 1 + d.len() * 8,
         }
     }
 
@@ -45,6 +58,12 @@ impl NetworkMessage {
     pub fn is_tx(&self) -> bool {
         matches!(self, NetworkMessage::TX(..))
     }
+
+    pub fn is_erlay(&self) -> bool {
+        matches!(self, NetworkMessage::REQRECON(..))
+            || matches!(self, NetworkMessage::SKETCH(..))
+            || matches!(self, NetworkMessage::RECONCILDIFF(..))
+    }
 }
 
 impl std::fmt::Display for NetworkMessage {
@@ -55,6 +74,17 @@ impl std::fmt::Display for NetworkMessage {
                 ("getdata", format!("txids: [{:x}]", x.iter().format(", ")))
             }
             NetworkMessage::TX(x) => ("tx", format!("txid: {:x}", x)),
+            NetworkMessage::REQRECON(x) => {
+                ("reqrecon", format!("txids: [{:x}]", x.iter().format(", ")))
+            }
+            NetworkMessage::SKETCH(s) => (
+                "sketch",
+                format!("txids: [{:x}]", s.get_tx_set().iter().format(", ")),
+            ),
+            NetworkMessage::RECONCILDIFF(x) => (
+                "reconcildiff",
+                format!("txids: [{:x}]", x.iter().format(", ")),
+            ),
         };
 
         write!(f, "{m} ({txs})")
