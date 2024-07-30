@@ -1,4 +1,6 @@
-use std::collections::{hash_map::Entry, HashMap, HashSet};
+use std::collections::hash_map::{DefaultHasher, Entry};
+use std::collections::{HashMap, HashSet};
+use std::hash::Hasher;
 
 use itertools::Itertools;
 use rand::rngs::StdRng;
@@ -15,6 +17,8 @@ pub type NodeId = usize;
 static INBOUND_INVENTORY_BROADCAST_INTERVAL: u64 = 5;
 static OUTBOUND_INVENTORY_BROADCAST_INTERVAL: u64 = 2;
 static NONPREF_PEER_TX_DELAY: u64 = 2;
+static OUTBOUND_FANOUT_DESTINATIONS: u16 = 1;
+static INBOUND_FANOUT_DESTINATIONS_FRACTION: f64 = 0.1;
 
 macro_rules! debug_log {
     ($time:tt, $id:expr, $($arg:tt)*)
@@ -276,6 +280,76 @@ impl Node {
 
     pub fn get_statistics(&self) -> &NodeStatistics {
         &self.node_statistics
+    }
+
+    fn is_fanout_target(&self, txid: &TxId, peer_id: &NodeId, n: f64) -> bool {
+        // Seed our hasher using the target transaction id
+        let mut deterministic_randomizer = DefaultHasher::new();
+        deterministic_randomizer.write_u32(*txid);
+
+        // Also add out own node_id as seed. This is only necessary in the simulator given node_is
+        // are global. If we don't seed the hasher with a distinct value, two nodes sharing the same
+        // neighbourhood will obtain the exact same ordering of peers here
+        deterministic_randomizer.write_usize(self.node_id);
+
+        // Round n deterministically at random (this is only really necessary for inbounds, as outbounds always
+        // provide an already rounded n)
+        let target_size = ((deterministic_randomizer.finish() & 0xFFFFFFFF)
+            + (n * 0x100000000u64 as f64) as u64)
+            >> 32;
+
+        // Shortcut to prevent useless work
+        if target_size == 0 {
+            return false;
+        }
+
+        // Inbound peers are also initiators
+        let peers = if self.is_peer_inbounds(peer_id) {
+            self.get_inbounds()
+        } else {
+            self.get_outbounds()
+        };
+
+        // Sort peers deterministically at random so we can pick the ones to fanout to.
+        // The order is computed using the hasher, as in whatever value results from
+        // hashing (txid | node_id | peer_id)
+        let mut best_peers = peers
+            .keys()
+            .map(|peer_id| {
+                // Sort values based on the already seeded hasher and their node_id
+                // Clone it so each hasher is only seeded with txid | node_id
+                let mut h = deterministic_randomizer.clone();
+                h.write_usize(*peer_id);
+                (h.finish(), *peer_id)
+            })
+            .collect::<Vec<_>>();
+        best_peers.sort();
+
+        let fanout_candidates = best_peers.iter().map(|(_, y)| *y).collect::<Vec<_>>();
+        fanout_candidates[0..target_size as usize].contains(peer_id)
+    }
+
+    /// Whether we should fanout the given transaction to the given peer.
+    /// Assume that Erlay support is a boolean flag for all nodes in the simulation
+    /// for now, so there are no fanout_tx_relay peers if Erlay is supported
+    fn should_fanout_to(&self, txid: &TxId, peer_id: &NodeId) -> bool {
+        let peer = self.get_peer(peer_id).unwrap();
+        if !peer.is_erlay() {
+            return true;
+        }
+
+        let n = if peer
+            .tx_reconciliation_state
+            .as_ref()
+            .unwrap()
+            .is_initiator()
+        {
+            self.get_inbounds().len() as f64 * INBOUND_FANOUT_DESTINATIONS_FRACTION
+        } else {
+            OUTBOUND_FANOUT_DESTINATIONS as f64
+        };
+
+        self.is_fanout_target(txid, peer_id, n)
     }
 
     /// Schedules the announcement of a given transaction to all our peers, based on when the next announcement interval will be.
