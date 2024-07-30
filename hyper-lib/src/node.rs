@@ -469,6 +469,16 @@ impl Node {
         peer_id: NodeId,
         request_time: u64,
     ) -> Option<(Event, u64)> {
+        if msg.is_erlay() {
+            assert!(
+                self.is_erlay,
+                "Trying to send an Erlay message to a peer (node_id: {peer_id}), but we do not support Erlay"
+            );
+            assert!(
+                self.get_peer(&peer_id).unwrap().is_erlay(),
+                "Trying to send an Erlay message to a peer (node_id: {peer_id}), but the it hasn't signaled Erlay support"
+            );
+        }
         let message: Option<(Event, u64)>;
 
         if let Some(peer) = self.get_peer(&peer_id) {
@@ -506,6 +516,8 @@ impl Node {
                         request_time,
                     ));
                 }
+                // FIXME: Erlay messages go here
+                _ => todo!(),
             }
         } else {
             panic!(
@@ -544,6 +556,16 @@ impl Node {
             self.get_peer(&peer_id).is_some(),
             "Received an message from a node we are not connected to (node_id: {peer_id})"
         );
+        if msg.is_erlay() {
+            assert!(
+                self.is_erlay,
+                "Received an Erlay message from a peer (node_id: {peer_id}), but we do not support Erlay"
+            );
+            assert!(
+                self.get_peer(&peer_id).unwrap().is_erlay(),
+                "Received an Erlay message from a peer (node_id: {peer_id}), but the it hasn't signaled Erlay support"
+            );
+        }
         debug_log!(
             request_time,
             self.node_id,
@@ -604,6 +626,8 @@ impl Node {
                 self.requested_transactions.remove(&txid);
                 self.broadcast_tx(txid, request_time)
             }
+            // FIXME: Erlay messages go here
+            _ => todo!(),
         }
     }
 }
