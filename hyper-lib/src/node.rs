@@ -7,6 +7,7 @@ use rand_distr::{Distribution, Exp};
 use crate::network::NetworkMessage;
 use crate::simulator::Event;
 use crate::statistics::NodeStatistics;
+use crate::txreconciliation::TxReconciliationState;
 use crate::{TxId, SECS_TO_NANOS};
 
 pub type NodeId = usize;
@@ -53,13 +54,23 @@ pub struct Peer {
     /// Transactions already known by this peer, this is populated either when a peer announced a transaction
     /// to us, or when we send a transaction to them
     known_transactions: HashSet<TxId>,
+    /// Transaction reconciliation related data for peers that support Erlay
+    tx_reconciliation_state: Option<TxReconciliationState>,
 }
 
 impl Peer {
     pub fn new(is_erlay: bool, is_inbound: bool) -> Self {
+        let tx_reconciliation_state = if is_erlay {
+            // Connection initiators match reconciliation initiators
+            // https://github.com/bitcoin/bips/blob/master/bip-0330.mediawiki#sendtxrcncl
+            Some(TxReconciliationState::new(is_inbound))
+        } else {
+            None
+        };
         Self {
             to_be_announced: Vec::new(),
             known_transactions: HashSet::new(),
+            tx_reconciliation_state,
         }
     }
 
@@ -77,6 +88,10 @@ impl Peer {
 
     pub fn drain_txs_to_be_announced(&mut self) -> Vec<TxId> {
         self.to_be_announced.drain(..).collect()
+    }
+
+    pub fn is_erlay(&self) -> bool {
+        self.tx_reconciliation_state.is_some()
     }
 }
 
