@@ -56,7 +56,7 @@ pub struct Peer {
 }
 
 impl Peer {
-    pub fn new() -> Self {
+    pub fn new(is_erlay: bool, is_inbound: bool) -> Self {
         Self {
             to_be_announced: Vec::new(),
             known_transactions: HashSet::new(),
@@ -80,12 +80,6 @@ impl Peer {
     }
 }
 
-impl std::default::Default for Peer {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// A node is the main unit of the simulator. It represents an abstractions of a Bitcoin node and
 /// stores all the data required to simulate sending and receiving transactions
 #[derive(Clone)]
@@ -96,6 +90,8 @@ pub struct Node {
     rng: StdRng,
     /// Whether the node is reachable or not
     is_reachable: bool,
+    /// Whether the node supports Erlay or not
+    is_erlay: bool,
     /// Map of inbound peers identified by their (global) node identifier
     in_peers: HashMap<NodeId, Peer>,
     /// Map of outbound peers identified by their (global) node identifier
@@ -115,11 +111,12 @@ pub struct Node {
 }
 
 impl Node {
-    pub fn new(node_id: NodeId, rng: StdRng, is_reachable: bool) -> Self {
+    pub fn new(node_id: NodeId, rng: StdRng, is_reachable: bool, is_erlay: bool) -> Self {
         Node {
             node_id,
             rng,
             is_reachable,
+            is_erlay,
             in_peers: HashMap::new(),
             out_peers: HashMap::new(),
             requested_transactions: HashSet::new(),
@@ -130,7 +127,6 @@ impl Node {
             node_statistics: NodeStatistics::new(),
         }
     }
-
     /// Gets the next discrete time when a transaction announcement needs to be sent to a given peer.
     /// A [peer_id] is required if the query is performed for an outbound peer, otherwise the request is
     /// assumed to be for inbounds. The method will sample a new time if we have reached the old sample,
@@ -196,19 +192,24 @@ impl Node {
     }
 
     /// Check whether a given peer is an inbound connection
-    fn is_inbounds(&self, peer_id: &NodeId) -> bool {
+    fn is_peer_inbounds(&self, peer_id: &NodeId) -> bool {
         self.in_peers.contains_key(peer_id)
     }
 
     /// Connects to a given peer. This method is used by the simulator to connect nodes between them
     /// alongside its counterpart [Node::accept_connection]
-    pub fn connect(&mut self, peer_id: NodeId) {
+    pub fn connect(&mut self, peer_id: NodeId, is_erlay: bool) {
+        if is_erlay {
+            assert!(self.is_erlay, "We are trying to stablish an Erlay connection with node {peer_id}, but we don't support Erlay");
+        }
         assert!(
             !self.in_peers.contains_key(&peer_id),
             "Peer {peer_id} is already connected to us"
         );
         assert!(
-            self.out_peers.insert(peer_id, Peer::new()).is_none(),
+            self.out_peers
+                .insert(peer_id, Peer::new(is_erlay, false))
+                .is_none(),
             "We ({}) are already connected to {peer_id}",
             self.node_id
         );
@@ -220,7 +221,10 @@ impl Node {
 
     /// Accept a connection from a given peer. This method is used by the simulator to connect nodes between them
     /// alongside its counterpart [Node::connect]
-    pub fn accept_connection(&mut self, peer_id: NodeId) {
+    pub fn accept_connection(&mut self, peer_id: NodeId, is_erlay: bool) {
+        if is_erlay {
+            assert!(self.is_erlay, "Node {peer_id} is trying to stablish an Erlay connection with us, but we don't support it");
+        }
         assert!(
             self.is_reachable,
             "Node {peer_id} tried to connect to us (node_id: {}), but we are not reachable",
@@ -234,7 +238,7 @@ impl Node {
         assert!(
             self.in_peers
                 // Inbounds are all on the same shared timer
-                .insert(peer_id, Peer::new())
+                .insert(peer_id, Peer::new(is_erlay, true))
                 .is_none(),
             "Peer {peer_id} is already connected to us"
         );
@@ -366,7 +370,7 @@ impl Node {
         // Inbound peers are de-prioritized. If an outbound peer announces a transaction
         // and an inbound peer request is in delayed stage, the inbounds will be dropped and
         // the outbound will be processed
-        if self.is_inbounds(&peer_id) {
+        if self.is_peer_inbounds(&peer_id) {
             debug_log!(
                 request_time,
                 self.node_id,
@@ -505,7 +509,7 @@ impl Node {
                         "Sending {msg} to peer {peer_id}"
                     );
                     self.node_statistics
-                        .add_sent(msg, self.is_inbounds(&peer_id));
+                        .add_sent(msg, self.is_peer_inbounds(&peer_id));
                 }
             }
         }
@@ -532,7 +536,7 @@ impl Node {
         );
 
         self.node_statistics
-            .add_received(&msg, self.is_inbounds(&peer_id));
+            .add_received(&msg, self.is_peer_inbounds(&peer_id));
 
         // We cannot hold a reference of peer here since we call mutable methods in the same context.
         // Maybe we can work around this by passing a reference to the peer instead of the node id

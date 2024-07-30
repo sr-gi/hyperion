@@ -63,6 +63,7 @@ impl Simulator {
     pub fn new(
         reachable_count: usize,
         unreachable_count: usize,
+        is_erlay: bool,
         seed: Option<u64>,
         network_latency: bool,
     ) -> Self {
@@ -75,7 +76,7 @@ impl Simulator {
             s
         };
         let mut rng: StdRng = StdRng::seed_from_u64(seed);
-        let network = Network::new(reachable_count, unreachable_count, &mut rng);
+        let network = Network::new(reachable_count, unreachable_count, is_erlay, &mut rng);
 
         // Create a network latency function for sent/received messages. This is in the order of
         // nanoseconds, using a LogNormal distribution with expected value NET_LATENCY_MEAN, and

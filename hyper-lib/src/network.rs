@@ -68,13 +68,18 @@ pub struct Network {
 }
 
 impl Network {
-    pub fn new(reachable_count: usize, unreachable_count: usize, rng: &mut StdRng) -> Self {
+    pub fn new(
+        reachable_count: usize,
+        unreachable_count: usize,
+        is_erlay: bool,
+        rng: &mut StdRng,
+    ) -> Self {
         let mut reachable_nodes = (0..reachable_count)
-            .map(|i| Node::new(i, rng.clone(), true))
+            .map(|i| Node::new(i, rng.clone(), true, is_erlay))
             .collect::<Vec<_>>();
         let mut unreachable_nodes: Vec<Node> = (reachable_count
             ..reachable_count + unreachable_count)
-            .map(|i| Node::new(i, rng.clone(), false))
+            .map(|i| Node::new(i, rng.clone(), false, is_erlay))
             .collect::<Vec<_>>();
 
         log::info!(
@@ -93,6 +98,7 @@ impl Network {
         Network::connect_unreachable(
             &mut unreachable_nodes,
             &mut reachable_nodes,
+            is_erlay,
             rng,
             &peers_die,
         );
@@ -101,7 +107,7 @@ impl Network {
             "Connecting reachable nodes to reachable ({} connections)",
             reachable_count * MAX_OUTBOUND_CONNECTIONS
         );
-        Network::connect_reachable(&mut reachable_nodes, rng, &peers_die);
+        Network::connect_reachable(&mut reachable_nodes, is_erlay, rng, &peers_die);
 
         let mut nodes = reachable_nodes;
         nodes.extend(unreachable_nodes);
@@ -118,6 +124,7 @@ impl Network {
     fn connect_unreachable(
         unreachable_nodes: &mut [Node],
         reachable_nodes: &mut [Node],
+        are_erlay: bool,
         rng: &mut StdRng,
         dist: &Uniform<NodeId>,
     ) {
@@ -125,13 +132,13 @@ impl Network {
             let mut already_connected_to = HashSet::new();
             for _ in 0..MAX_OUTBOUND_CONNECTIONS {
                 let peer_id = Network::get_peer_to_connect(&mut already_connected_to, rng, dist);
-                node.connect(peer_id);
+                node.connect(peer_id, are_erlay);
                 reachable_nodes
                     .get_mut(peer_id)
                     .unwrap_or_else(|| {
                         panic!("Cannot connect to reachable peer {peer_id}. Peer not found")
                     })
-                    .accept_connection(node.get_id());
+                    .accept_connection(node.get_id(), are_erlay);
             }
         }
     }
@@ -139,7 +146,12 @@ impl Network {
     /// Connects a collection of reachable nodes between them.
     /// A given pair of nodes will have, at most, one connection between them.
     /// Nodes to be connected to are picked at random given an uniform distribution [dist]
-    fn connect_reachable(reachable_nodes: &mut [Node], rng: &mut StdRng, dist: &Uniform<NodeId>) {
+    fn connect_reachable(
+        reachable_nodes: &mut [Node],
+        are_erlay: bool,
+        rng: &mut StdRng,
+        dist: &Uniform<NodeId>,
+    ) {
         for node_id in 0..reachable_nodes.len() {
             let mut already_connected_to = reachable_nodes[node_id]
                 .get_inbounds()
@@ -163,8 +175,8 @@ impl Network {
                     (node, peer)
                 };
 
-                node.connect(peer_id);
-                peer.accept_connection(node_id);
+                node.connect(peer_id, are_erlay);
+                peer.accept_connection(node_id, are_erlay);
             }
         }
     }
