@@ -3,6 +3,7 @@ pub mod network;
 pub mod node;
 pub mod simulator;
 pub mod statistics;
+pub mod txreconciliation;
 
 pub type TxId = u32;
 
