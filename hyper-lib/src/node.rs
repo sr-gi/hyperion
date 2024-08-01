@@ -333,7 +333,7 @@ impl Node {
             .collect::<Vec<TxId>>();
 
         if to_be_announced.is_empty() {
-            return None;
+            None
         } else {
             self.send_message_to(NetworkMessage::INV(to_be_announced), peer_id, current_time)
         }
@@ -350,7 +350,7 @@ impl Node {
     ) -> Option<(Event, u64)> {
         let to_be_requested = self
             .filter_known_and_requested_transactions(txids.iter())
-            .map(|x| *x)
+            .copied()
             .collect::<Vec<_>>();
         if to_be_requested.is_empty() {
             debug_log!(
@@ -420,7 +420,7 @@ impl Node {
         });
         let to_be_requested = self
             .filter_known_and_requested_transactions(pending.iter())
-            .map(|x| *x)
+            .copied()
             .collect::<Vec<_>>();
         if to_be_requested.is_empty() {
             debug_log!(
