@@ -40,10 +40,6 @@ impl Event {
         matches!(self, Event::ReceiveMessageFrom(..))
     }
 
-    pub fn is_delayed_request(&self) -> bool {
-        matches!(self, Event::ProcessDelayedRequest(..))
-    }
-
     pub fn get_message(&self) -> Option<&NetworkMessage> {
         match self {
             Event::ReceiveMessageFrom(_, _, m) => Some(m),
