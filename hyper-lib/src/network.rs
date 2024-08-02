@@ -1,5 +1,6 @@
 use crate::node::{Node, NodeId};
 use crate::statistics::NetworkStatistics;
+use crate::txreconciliation::Sketch;
 use crate::{TxId, MAX_OUTBOUND_CONNECTIONS};
 
 use std::collections::HashSet;
@@ -16,6 +17,12 @@ pub enum NetworkMessage {
     INV(Vec<TxId>),
     GETDATA(Vec<TxId>),
     TX(TxId),
+    // This is a hack. Reqrecon does not include a collection of txids (that'd defuse the purpose of Erlay). However,
+    // for simulation purposes we need to estimate the set difference (q). A workaround for that is letting the peer
+    // know what we know so it can be always perfectly "predicted", and scale it to a chosen factor later on if we chose to
+    REQRECON(Vec<TxId>),
+    SKETCH(Sketch),
+    RECONCILDIFF(Vec<TxId>),
 }
 
 impl NetworkMessage {
@@ -28,6 +35,12 @@ impl NetworkMessage {
             NetworkMessage::GETDATA(x) => NET_MESSAGE_HEADER_SIZE + 36 * x.len(),
             // We are using 225 here as an approximation to the average size of a 1 in 2 out tx
             NetworkMessage::TX(_) => NET_MESSAGE_HEADER_SIZE + 225,
+            // Set size + q, both 16-bit values. Notice here the inner value of the message is not taken into
+            // account, given that is just a hack used by the simulator to perfectly predict q
+            NetworkMessage::REQRECON(_) => NET_MESSAGE_HEADER_SIZE + 2 + 2,
+            NetworkMessage::SKETCH(s) => NET_MESSAGE_HEADER_SIZE + s.get_size(),
+            // success (1 byte) + ask_shortids (n bytes, depending on the number of missing transactions, 8 bytes per item)
+            NetworkMessage::RECONCILDIFF(d) => NET_MESSAGE_HEADER_SIZE + 1 + d.len() * 8,
         }
     }
 
@@ -45,6 +58,12 @@ impl NetworkMessage {
     pub fn is_tx(&self) -> bool {
         matches!(self, NetworkMessage::TX(..))
     }
+
+    pub fn is_erlay(&self) -> bool {
+        matches!(self, NetworkMessage::REQRECON(..))
+            || matches!(self, NetworkMessage::SKETCH(..))
+            || matches!(self, NetworkMessage::RECONCILDIFF(..))
+    }
 }
 
 impl std::fmt::Display for NetworkMessage {
@@ -55,6 +74,17 @@ impl std::fmt::Display for NetworkMessage {
                 ("getdata", format!("txids: [{:x}]", x.iter().format(", ")))
             }
             NetworkMessage::TX(x) => ("tx", format!("txid: {:x}", x)),
+            NetworkMessage::REQRECON(x) => {
+                ("reqrecon", format!("txids: [{:x}]", x.iter().format(", ")))
+            }
+            NetworkMessage::SKETCH(s) => (
+                "sketch",
+                format!("txids: [{:x}]", s.get_tx_set().iter().format(", ")),
+            ),
+            NetworkMessage::RECONCILDIFF(x) => (
+                "reconcildiff",
+                format!("txids: [{:x}]", x.iter().format(", ")),
+            ),
         };
 
         write!(f, "{m} ({txs})")
@@ -68,13 +98,18 @@ pub struct Network {
 }
 
 impl Network {
-    pub fn new(reachable_count: usize, unreachable_count: usize, rng: &mut StdRng) -> Self {
+    pub fn new(
+        reachable_count: usize,
+        unreachable_count: usize,
+        is_erlay: bool,
+        rng: &mut StdRng,
+    ) -> Self {
         let mut reachable_nodes = (0..reachable_count)
-            .map(|i| Node::new(i, rng.clone(), true))
+            .map(|i| Node::new(i, rng.clone(), true, is_erlay))
             .collect::<Vec<_>>();
         let mut unreachable_nodes: Vec<Node> = (reachable_count
             ..reachable_count + unreachable_count)
-            .map(|i| Node::new(i, rng.clone(), false))
+            .map(|i| Node::new(i, rng.clone(), false, is_erlay))
             .collect::<Vec<_>>();
 
         log::info!(
@@ -93,6 +128,7 @@ impl Network {
         Network::connect_unreachable(
             &mut unreachable_nodes,
             &mut reachable_nodes,
+            is_erlay,
             rng,
             &peers_die,
         );
@@ -101,7 +137,7 @@ impl Network {
             "Connecting reachable nodes to reachable ({} connections)",
             reachable_count * MAX_OUTBOUND_CONNECTIONS
         );
-        Network::connect_reachable(&mut reachable_nodes, rng, &peers_die);
+        Network::connect_reachable(&mut reachable_nodes, is_erlay, rng, &peers_die);
 
         let mut nodes = reachable_nodes;
         nodes.extend(unreachable_nodes);
@@ -118,6 +154,7 @@ impl Network {
     fn connect_unreachable(
         unreachable_nodes: &mut [Node],
         reachable_nodes: &mut [Node],
+        are_erlay: bool,
         rng: &mut StdRng,
         dist: &Uniform<NodeId>,
     ) {
@@ -125,13 +162,13 @@ impl Network {
             let mut already_connected_to = HashSet::new();
             for _ in 0..MAX_OUTBOUND_CONNECTIONS {
                 let peer_id = Network::get_peer_to_connect(&mut already_connected_to, rng, dist);
-                node.connect(peer_id);
+                node.connect(peer_id, are_erlay);
                 reachable_nodes
                     .get_mut(peer_id)
                     .unwrap_or_else(|| {
                         panic!("Cannot connect to reachable peer {peer_id}. Peer not found")
                     })
-                    .accept_connection(node.get_id());
+                    .accept_connection(node.get_id(), are_erlay);
             }
         }
     }
@@ -139,7 +176,12 @@ impl Network {
     /// Connects a collection of reachable nodes between them.
     /// A given pair of nodes will have, at most, one connection between them.
     /// Nodes to be connected to are picked at random given an uniform distribution [dist]
-    fn connect_reachable(reachable_nodes: &mut [Node], rng: &mut StdRng, dist: &Uniform<NodeId>) {
+    fn connect_reachable(
+        reachable_nodes: &mut [Node],
+        are_erlay: bool,
+        rng: &mut StdRng,
+        dist: &Uniform<NodeId>,
+    ) {
         for node_id in 0..reachable_nodes.len() {
             let mut already_connected_to = reachable_nodes[node_id]
                 .get_inbounds()
@@ -163,8 +205,8 @@ impl Network {
                     (node, peer)
                 };
 
-                node.connect(peer_id);
-                peer.accept_connection(node_id);
+                node.connect(peer_id, are_erlay);
+                peer.accept_connection(node_id, are_erlay);
             }
         }
     }

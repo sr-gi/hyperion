@@ -64,7 +64,12 @@ pub struct Simulator {
 }
 
 impl Simulator {
-    pub fn new(reachable_count: usize, unreachable_count: usize, seed: Option<u64>) -> Self {
+    pub fn new(
+        reachable_count: usize,
+        unreachable_count: usize,
+        is_erlay: bool,
+        seed: Option<u64>,
+    ) -> Self {
         let seed = if let Some(seed) = seed {
             log::info!("Using user provided rng seed: {}", seed);
             seed
@@ -74,7 +79,7 @@ impl Simulator {
             s
         };
         let mut rng: StdRng = StdRng::seed_from_u64(seed);
-        let network = Network::new(reachable_count, unreachable_count, &mut rng);
+        let network = Network::new(reachable_count, unreachable_count, is_erlay, &mut rng);
 
         // Create a network delay function for sent/received messages. This is in the order of
         // nanoseconds, using a LogNormal distribution with expected value NET_DELAY_MEAN, and
