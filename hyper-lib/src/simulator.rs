@@ -78,9 +78,8 @@ impl Simulator {
 
         // Create a network delay function for sent/received messages. This is in the order of
         // nanoseconds, using a LogNormal distribution with expected value NET_DELAY_MEAN, and
-        // variance NET_DELAY_MEAN/5
-        let net_delay_fn: LogNormal<f64> =
-            LogNormal::from_mean_cv(NET_DELAY_MEAN, NET_DELAY_MEAN * 0.2).unwrap();
+        // variance of 20% of the expected value
+        let net_delay_fn: LogNormal<f64> = LogNormal::from_mean_cv(NET_DELAY_MEAN, 0.2).unwrap();
 
         Self {
             rng,
