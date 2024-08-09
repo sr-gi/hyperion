@@ -10,7 +10,7 @@ use crate::network::{Network, NetworkMessage};
 use crate::node::{Node, NodeId};
 use crate::{TxId, SECS_TO_NANOS};
 
-static NET_DELAY_MEAN: f64 = 0.01 * SECS_TO_NANOS as f64; // 10ms
+static NET_LATENCY_MEAN: f64 = 0.01 * SECS_TO_NANOS as f64; // 10ms
 
 /// An enumeration of all the events that can be created in a simulation
 #[derive(Clone, Hash, Eq, PartialEq)]
@@ -55,8 +55,8 @@ impl Event {
 pub struct Simulator {
     /// A pre-seeded rng to allow reproducing previous simulation results
     rng: StdRng,
-    /// A function used to generate network delays. Follows a LogNormal distribution over a given value
-    net_delay_fn: LogNormal<f64>,
+    /// A function used to generate network latency. Follows a LogNormal distribution over a given value
+    net_latency_fn: Option<LogNormal<f64>>,
     /// The simulated network
     pub network: Network,
     /// A queue of the events that make the simulation, ordered by discrete time
@@ -64,7 +64,12 @@ pub struct Simulator {
 }
 
 impl Simulator {
-    pub fn new(reachable_count: usize, unreachable_count: usize, seed: Option<u64>) -> Self {
+    pub fn new(
+        reachable_count: usize,
+        unreachable_count: usize,
+        seed: Option<u64>,
+        network_latency: bool,
+    ) -> Self {
         let seed = if let Some(seed) = seed {
             log::info!("Using user provided rng seed: {}", seed);
             seed
@@ -76,24 +81,28 @@ impl Simulator {
         let mut rng: StdRng = StdRng::seed_from_u64(seed);
         let network = Network::new(reachable_count, unreachable_count, &mut rng);
 
-        // Create a network delay function for sent/received messages. This is in the order of
-        // nanoseconds, using a LogNormal distribution with expected value NET_DELAY_MEAN, and
+        // Create a network latency function for sent/received messages. This is in the order of
+        // nanoseconds, using a LogNormal distribution with expected value NET_LATENCY_MEAN, and
         // variance of 20% of the expected value
-        let net_delay_fn: LogNormal<f64> = LogNormal::from_mean_cv(NET_DELAY_MEAN, 0.2).unwrap();
+        let net_latency_fn = if network_latency {
+            Some(LogNormal::from_mean_cv(NET_LATENCY_MEAN, 0.2).unwrap())
+        } else {
+            None
+        };
 
         Self {
             rng,
-            net_delay_fn,
+            net_latency_fn,
             network,
             event_queue: PriorityQueue::new(),
         }
     }
 
-    /// Adds an event to the event queue, adding a random delay if the event is [Event::ReceiveMessageFrom].
-    /// These delays simulate the network transfer time for the given message
+    /// Adds an event to the event queue, adding random latency if the event is [Event::ReceiveMessageFrom].
+    /// These latencies simulate the messages traveling across the network
     pub fn add_event(&mut self, event: Event, mut time: u64) {
-        if event.is_receive_message() {
-            time += self.net_delay_fn.sample(&mut self.rng).round() as u64;
+        if self.net_latency_fn.is_some() && event.is_receive_message() {
+            time += self.net_latency_fn.unwrap().sample(&mut self.rng).round() as u64;
         }
 
         self.event_queue.push(event, Reverse(time));

@@ -31,6 +31,9 @@ pub struct Cli {
     /// Seed to run random activity generator deterministically
     #[clap(long, short)]
     pub seed: Option<u64>,
+    /// Don't add network latency to messages exchanges between peers. Useful for debugging
+    #[clap(long, short)]
+    pub no_latency: bool,
 }
 
 impl Cli {
