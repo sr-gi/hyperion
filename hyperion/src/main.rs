@@ -17,7 +17,7 @@ fn main() -> anyhow::Result<()> {
         .unwrap();
 
     let node_count = cli.reachable + cli.unreachable;
-    let mut simulator = Simulator::new(cli.reachable, cli.unreachable, cli.seed);
+    let mut simulator = Simulator::new(cli.reachable, cli.unreachable, cli.seed, !cli.no_latency);
 
     // Pick a (source) node to broadcast the target transaction from.
     let txid = simulator.get_random_txid();
