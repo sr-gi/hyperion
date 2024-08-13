@@ -32,7 +32,7 @@ pub struct Cli {
     #[clap(long, short)]
     pub seed: Option<u64>,
     /// Don't add network latency to messages exchanges between peers. Useful for debugging
-    #[clap(long, short)]
+    #[clap(long)]
     pub no_latency: bool,
 }
 
