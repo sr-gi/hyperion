@@ -9,8 +9,6 @@ use itertools::Itertools;
 use rand::distributions::{Distribution, Uniform};
 use rand::rngs::StdRng;
 
-const NET_MESSAGE_HEADER_SIZE: usize = 4 + 12 + 4 + 4;
-
 /// Defines the collection of network messages that can be exchanged between peers
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum NetworkMessage {
@@ -258,6 +256,10 @@ impl Network {
 
     pub fn get_nodes(&self) -> &Vec<Node> {
         &self.nodes
+    }
+
+    pub fn get_nodes_mut(&mut self) -> &mut Vec<Node> {
+        &mut self.nodes
     }
 
     fn get_reachable_nodes(&self) -> &[Node] {

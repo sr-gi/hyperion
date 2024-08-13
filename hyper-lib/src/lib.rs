@@ -5,6 +5,8 @@ pub mod simulator;
 pub mod statistics;
 pub mod txreconciliation;
 
+mod indexedmap;
+
 pub type TxId = u32;
 
 pub const MAX_OUTBOUND_CONNECTIONS: usize = 8;

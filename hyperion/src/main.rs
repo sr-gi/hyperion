@@ -16,11 +16,13 @@ fn main() -> anyhow::Result<()> {
         .init()
         .unwrap();
 
+    let start_time = 0;
     let node_count = cli.reachable + cli.unreachable;
     let mut simulator = Simulator::new(
         cli.reachable,
         cli.unreachable,
         cli.erlay,
+        start_time,
         cli.seed,
         !cli.no_latency,
     );
@@ -33,7 +35,7 @@ fn main() -> anyhow::Result<()> {
     log::info!(
         "Starting simulation: broadcasting transaction (txid: {txid:x}) from node {source_node_id}"
     );
-    for (event, time) in source_node.broadcast_tx(txid, 0) {
+    for (event, time) in source_node.broadcast_tx(txid, start_time) {
         simulator.add_event(event, time);
     }
 
@@ -80,6 +82,17 @@ fn main() -> anyhow::Result<()> {
                 {
                     simulator.add_event(delayed_event, next_interval);
                 }
+            }
+            Event::ProcessScheduledReconciliation(src) => {
+                // Processing an scheduled reconciliation will return the reconciliation flow
+                // start, plus the scheduling of the next reconciliation (with the next peer in line)
+                let ((rec_req, req_time), (next_event, future_time)) = simulator
+                    .network
+                    .get_node_mut(src)
+                    .unwrap()
+                    .process_scheduled_reconciliation(time);
+                simulator.add_event(rec_req, req_time);
+                simulator.add_event(next_event, future_time);
             }
         }
     }
