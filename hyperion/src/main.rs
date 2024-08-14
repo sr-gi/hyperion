@@ -8,6 +8,7 @@ use hyperion::cli::Cli;
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    cli.verify();
 
     SimpleLogger::new()
         .with_level(LevelFilter::Warn)
@@ -21,6 +22,7 @@ fn main() -> anyhow::Result<()> {
     let mut simulator = Simulator::new(
         cli.reachable,
         cli.unreachable,
+        cli.num_outbounds,
         cli.erlay,
         start_time,
         cli.seed,

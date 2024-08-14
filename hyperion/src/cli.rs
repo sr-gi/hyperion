@@ -41,7 +41,7 @@ pub struct Cli {
 
 impl Cli {
     pub fn verify(&self) {
-        assert!(self.reachable < 10 * self.num_outbounds,
+        assert!(self.reachable >= 10 * self.num_outbounds,
             "Too few reachable peers. In order to allow enough randomness in the network topology generation, please make sure
             the number of reachable nodes is, at least, 10 times the number of outbound connections per node");
     }
