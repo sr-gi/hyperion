@@ -117,3 +117,114 @@ impl TxReconciliationState {
         (our_diff, their_diff)
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::test::get_random_txid;
+
+    #[test]
+    fn test_recon_state() {
+        let mut tx_recon_state = TxReconciliationState::new(true);
+        tx_recon_state.set_reconciling();
+        assert!(tx_recon_state.is_reconciling());
+        assert!(tx_recon_state.recon_set.is_empty());
+        assert!(tx_recon_state.delayed_set.is_empty());
+
+        // Add some txs to the recon set
+        for _ in 0..10 {
+            tx_recon_state.add_tx(get_random_txid());
+        }
+
+        // Check that all transactions are delayed
+        assert!(tx_recon_state.recon_set.is_empty());
+        assert!(!tx_recon_state.delayed_set.is_empty());
+
+        // Move to available and check again
+        tx_recon_state.make_delayed_available();
+        assert!(!tx_recon_state.recon_set.is_empty());
+        assert!(tx_recon_state.delayed_set.is_empty());
+
+        // Add some more transactions to delayed
+        for _ in 0..10 {
+            tx_recon_state.add_tx(get_random_txid());
+        }
+        assert!(!tx_recon_state.recon_set.is_empty());
+        assert!(!tx_recon_state.delayed_set.is_empty());
+
+        let txs = tx_recon_state.get_recon_set().clone();
+        let delayed_txs = tx_recon_state.delayed_set.clone();
+
+        // Clear and  check that the set returned is the one before clearing
+        // that the recon set is empty, but the delayed set is preserved
+        // and that the state is set as not reconciling anymore
+        assert_eq!(tx_recon_state.clear(), txs);
+        assert_eq!(tx_recon_state.delayed_set, delayed_txs);
+        assert!(tx_recon_state.recon_set.is_empty());
+        assert!(!tx_recon_state.delayed_set.is_empty());
+        assert!(!tx_recon_state.is_reconciling());
+    }
+
+    #[test]
+    fn test_sketch() {
+        let mut tx_recon_state = TxReconciliationState::new(true);
+        let mut our_txs = Vec::new();
+        let mut their_txs = Vec::new();
+        let mut unknown_by_us = Vec::new();
+        let mut unknown_by_them = Vec::new();
+        let d = 8;
+
+        // Add some txs to the recon set
+        for i in 0..10 {
+            let txid = get_random_txid();
+            tx_recon_state.recon_set.insert(txid);
+            our_txs.push(txid);
+
+            // Make half of the transactions also known by our peer (5)
+            if i % 2 == 0 {
+                their_txs.push(txid);
+            } else {
+                unknown_by_them.push(txid)
+            }
+        }
+
+        // Create some transactions (3) unknown by us and add them to their set
+        for _ in 0..3 {
+            let txid = get_random_txid();
+            unknown_by_us.push(txid);
+            their_txs.push(txid);
+        }
+
+        // Sort the vectors so they can be properly compared later
+        our_txs.sort();
+        their_txs.sort();
+        unknown_by_us.sort();
+        unknown_by_them.sort();
+
+        let our_sketch = tx_recon_state.compute_sketch(their_txs.clone());
+        let mut sketch_txs = our_sketch.get_tx_set().clone();
+        sketch_txs.sort();
+
+        // Check that our sketch contains the transactions we added to it
+        // and that it doesn't contain any of the transactions that only they had
+        assert_eq!(sketch_txs, our_txs);
+        for tx in their_txs.iter() {
+            if unknown_by_us.contains(tx) {
+                assert!(!our_sketch.get_tx_set().contains(tx))
+            }
+        }
+        // The set difference is 8: 5 (they're missing) + 3 (we're missing)
+        assert_eq!(our_sketch.get_size(), d);
+
+        // Compute their sketch and diff them
+        let their_sketch = Sketch {
+            tx_set: their_txs.clone(),
+            d,
+        };
+        let (mut our_diff, mut their_diff) = tx_recon_state.compute_sketch_diff(their_sketch);
+        our_diff.sort();
+        their_diff.sort();
+        assert_eq!(our_diff, unknown_by_us);
+        assert_eq!(their_diff, unknown_by_them);
+    }
+}
