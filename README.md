@@ -18,6 +18,8 @@ The node transaction relaying logic follows Bitcoin Core's design:
     - For inbounds, the delay follows a Poisson process with an expected value of `INBOUND_INVENTORY_BROADCAST_INTERVAL(5s)`. All inbounds are on the same timer
     - For outbounds, the delay follows a Poisson process with an expected value of `OUTBOUND_INVENTORY_BROADCAST_INTERVAL(2s)`. Every outbound has a unique timer
 - `GETDATA`s are prioritized to outbound peers, hence if an inbound peer announces a transaction, the request will be
+- `REQRECON` messages are sent on a fix timer, on a round robin fashion every `RECON_REQUEST_INTERVAL(8s)`, meaning each request will go out every `8/n`s where `n` is the outbound peer count of the node
+- `SKETCH`es exchanged between peers contains transactions as long as those would have been requestable by the peer at the time of sharing the sketch (this means if an INV containing such transaction would have been created)
 delayed by `NONPREF_PEER_TX_DELAY(2s)`, and superseded by any other request by an outbound peer<sup>1</sup>
 
 All messages exchanged between peers are added some network latency, which is sampled at random from a Log Normal distribution with expected value of `10ms` and variance of `2ms`.
@@ -26,7 +28,7 @@ All messages exchanged between peers are added some network latency, which is sa
 
 ## Status of the project
 
-Currently, the simulator only implements the traditional `INV -> GETDATA -> TX` logic for exchanging transactions between peers. The simulation consist on sending a single transaction from a randomly selected node executing the corresponding events until all messages have been exchanged.
+The simulator only implements the traditional `INV -> GETDATA -> TX` (fanout) and the Erlay logic without reconciliation extensions (given sets are always perfectly reconstructed) The simulation consist on sending a single transaction from a randomly selected node executing the corresponding events until all messages have been exchanged.
 
 ## Usage
 ```
@@ -44,8 +46,12 @@ Options:
           Possible values: [off, error, warn, info, debug, trace] [default: info]
   -p, --percentile-target <PERCENTILE_TARGET>
           Target percentile of node the transaction needs to reach. Use to measure propagation times [default: 90]
+      --erlay
+          Whether nodes in the simulation support Erlay or not (all of them for now, this is likely to change)
   -s, --seed <SEED>
           Seed to run random activity generator deterministically
+      --no-latency
+          Don't add network latency to messages exchanges between peers. Useful for debugging
   -h, --help
           Print help
   -V, --version
