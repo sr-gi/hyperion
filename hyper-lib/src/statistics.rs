@@ -2,7 +2,7 @@ use std::iter::Sum;
 
 use crate::network::NetworkMessage;
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 struct Data {
     from_inbounds: u32,
     from_outbounds: u32,
@@ -41,7 +41,7 @@ impl std::ops::Add for Data {
 }
 
 /// Statistics about how many messages of a certain type has a node sent/received
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct NodeStatistics {
     inv: Data,
     get_data: Data,

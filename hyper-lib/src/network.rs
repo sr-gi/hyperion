@@ -210,22 +210,17 @@ impl Network {
     }
 
     pub fn get_statistics(&self) -> NetworkStatistics {
-        let reachable_statistics = self
-            .get_reachable_nodes()
-            .iter()
-            .map(|x| x.get_statistics().clone())
-            .sum();
-        let unreachable_nodes = self.get_uneachable_nodes();
-        let unreachable_statistics = unreachable_nodes
-            .iter()
-            .map(|x| x.get_statistics().clone())
-            .sum();
-
         NetworkStatistics::new(
-            reachable_statistics,
+            self.get_reachable_nodes()
+                .iter()
+                .map(|x| *x.get_statistics())
+                .sum(),
             self.reachable_count,
-            unreachable_statistics,
-            unreachable_nodes.len(),
+            self.get_uneachable_nodes()
+                .iter()
+                .map(|x| *x.get_statistics())
+                .sum(),
+            self.get_node_count() - self.reachable_count,
         )
     }
 }
