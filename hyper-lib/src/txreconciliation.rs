@@ -123,6 +123,12 @@ mod test {
     use super::*;
     use crate::test::get_random_txid;
 
+    impl TxReconciliationState {
+        pub(crate) fn get_delayed_set(&self) -> &HashSet<ShortID> {
+            &self.delayed_set
+        }
+    }
+
     #[test]
     fn test_recon_state() {
         let mut tx_recon_state = TxReconciliationState::new(true);
