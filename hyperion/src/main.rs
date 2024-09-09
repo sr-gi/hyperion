@@ -16,8 +16,16 @@ fn main() -> anyhow::Result<()> {
         .init()
         .unwrap();
 
+    let start_time = 0;
     let node_count = cli.reachable + cli.unreachable;
-    let mut simulator = Simulator::new(cli.reachable, cli.unreachable, cli.seed, !cli.no_latency);
+    let mut simulator = Simulator::new(
+        cli.reachable,
+        cli.unreachable,
+        cli.erlay,
+        start_time,
+        cli.seed,
+        !cli.no_latency,
+    );
 
     // Pick a (source) node to broadcast the target transaction from.
     let txid = simulator.get_random_txid();
@@ -27,7 +35,7 @@ fn main() -> anyhow::Result<()> {
     log::info!(
         "Starting simulation: broadcasting transaction (txid: {txid:x}) from node {source_node_id}"
     );
-    for (event, time) in source_node.broadcast_tx(txid, 0) {
+    for (event, time) in source_node.broadcast_tx(txid, start_time) {
         simulator.add_event(event, time);
     }
 
@@ -73,6 +81,31 @@ fn main() -> anyhow::Result<()> {
                     .process_delayed_request(txid, time)
                 {
                     simulator.add_event(delayed_event, next_interval);
+                }
+            }
+            Event::ProcessScheduledReconciliation(src) => {
+                // Drop the periodic schedule if there is nothing else to be reconciled
+                // This allow us to finish the simulation, for Erlay scenarios, by consuming
+                // all messages in the queue
+                let node = simulator.network.get_node(src).unwrap();
+                if !node.knows_transaction(&txid)
+                    || !node.get_outbounds().keys().all(|node_id| {
+                        simulator
+                            .network
+                            .get_node(*node_id)
+                            .unwrap()
+                            .knows_transaction(&txid)
+                    })
+                {
+                    // Processing an scheduled reconciliation will return the reconciliation flow
+                    // start, plus the scheduling of the next reconciliation (with the next peer in line)
+                    let ((rec_req, req_time), (next_event, future_time)) = simulator
+                        .network
+                        .get_node_mut(src)
+                        .unwrap()
+                        .process_scheduled_reconciliation(time);
+                    simulator.add_event(rec_req, req_time);
+                    simulator.add_event(next_event, future_time);
                 }
             }
         }

@@ -1,0 +1,31 @@
+name: Build, lint and test
+
+on: workflow_call
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check Code with stable output
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.76.0
+      - name: Install Clippy
+        run: rustup component add clippy
+      - name: Install Rustfmt
+        run: rustup component add rustfmt
+      - name: run check
+        run: make check
+
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo build
+        run: cargo build --release --all-features
+      - name: cargo test
+        run: cargo test --all-features --all-targets --benches

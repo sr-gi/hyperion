@@ -7,13 +7,13 @@ use rand::{thread_rng, Rng, RngCore, SeedableRng};
 use rand_distr::{Distribution, LogNormal};
 
 use crate::network::{Network, NetworkMessage};
-use crate::node::{Node, NodeId};
+use crate::node::{Node, NodeId, RECON_REQUEST_INTERVAL};
 use crate::{TxId, SECS_TO_NANOS};
 
 static NET_LATENCY_MEAN: f64 = 0.01 * SECS_TO_NANOS as f64; // 10ms
 
 /// An enumeration of all the events that can be created in a simulation
-#[derive(Clone, Hash, Eq, PartialEq)]
+#[derive(Clone, Hash, Eq, PartialEq, Debug)]
 pub enum Event {
     /// The destination (0) receives a new message (2) from given source (1)
     ReceiveMessageFrom(NodeId, NodeId, NetworkMessage),
@@ -21,6 +21,10 @@ pub enum Event {
     ProcessScheduledAnnouncement(NodeId, NodeId),
     /// A given node (0) processed a delayed request of a give transaction (1)
     ProcessDelayedRequest(NodeId, NodeId),
+    /// Processes a scheduled reconciliation on the given node
+    /// Peers are reconciled on a round robin fashion, so there is
+    /// no need to specify the target
+    ProcessScheduledReconciliation(NodeId),
 }
 
 impl Event {
@@ -36,12 +40,12 @@ impl Event {
         Event::ProcessDelayedRequest(src, dst)
     }
 
-    pub fn is_receive_message(&self) -> bool {
-        matches!(self, Event::ReceiveMessageFrom(..))
+    pub fn process_scheduled_reconciliation(src: NodeId) -> Self {
+        Event::ProcessScheduledReconciliation(src)
     }
 
-    pub fn is_delayed_request(&self) -> bool {
-        matches!(self, Event::ProcessDelayedRequest(..))
+    pub fn is_receive_message(&self) -> bool {
+        matches!(self, Event::ReceiveMessageFrom(..))
     }
 
     pub fn get_message(&self) -> Option<&NetworkMessage> {
@@ -67,6 +71,8 @@ impl Simulator {
     pub fn new(
         reachable_count: usize,
         unreachable_count: usize,
+        is_erlay: bool,
+        current_time: u64,
         seed: Option<u64>,
         network_latency: bool,
     ) -> Self {
@@ -79,7 +85,21 @@ impl Simulator {
             s
         };
         let mut rng: StdRng = StdRng::seed_from_u64(seed);
-        let network = Network::new(reachable_count, unreachable_count, &mut rng);
+        let mut network = Network::new(reachable_count, unreachable_count, is_erlay, &mut rng);
+
+        let mut event_queue = PriorityQueue::new();
+        if is_erlay {
+            for node in network.get_nodes_mut() {
+                // Schedule transaction reconciliation here. As opposite to fanout, reconciliation is scheduled
+                // on a fixed interval. This means that we need to start it when the connection is made. However,
+                // in the simulator, the whole network is build at the same (discrete) time. This does not follow
+                // reality, so we will pick a random value between the simulation start time (current_time) and
+                // RECON_REQUEST_INTERVAL as the first scheduled reconciliation for each connection.
+                let delta = rng.gen_range(0..RECON_REQUEST_INTERVAL * SECS_TO_NANOS);
+                let (e, t) = node.schedule_set_reconciliation(current_time + delta);
+                event_queue.push(e, Reverse(t));
+            }
+        }
 
         // Create a network latency function for sent/received messages. This is in the order of
         // nanoseconds, using a LogNormal distribution with expected value NET_LATENCY_MEAN, and
@@ -94,7 +114,7 @@ impl Simulator {
             rng,
             net_latency_fn,
             network,
-            event_queue: PriorityQueue::new(),
+            event_queue,
         }
     }
 
