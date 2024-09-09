@@ -1,0 +1,16 @@
+name: CI jobs
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: ["*"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Build, lint and test
+    uses: ./.github/workflows/build-and-test.yaml
+    secrets: inherit

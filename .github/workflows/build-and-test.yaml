@@ -7,7 +7,7 @@ permissions:
 
 jobs:
   check:
-    name: Check Code with stable output
+    name: Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -16,8 +16,8 @@ jobs:
         run: rustup component add clippy
       - name: Install Rustfmt
         run: rustup component add rustfmt
-      - name: run check
-        run: make check
+      - name: Check clippy
+        run: cargo clippy --all-features --all-targets --color always -- --deny warnings
 
   build:
     name: Build and test
