@@ -13,7 +13,7 @@ use crate::{TxId, SECS_TO_NANOS};
 static NET_LATENCY_MEAN: f64 = 0.01 * SECS_TO_NANOS as f64; // 10ms
 
 /// An enumeration of all the events that can be created in a simulation
-#[derive(Clone, Hash, Eq, PartialEq)]
+#[derive(Clone, Hash, Eq, PartialEq, Debug)]
 pub enum Event {
     /// The destination (0) receives a new message (2) from given source (1)
     ReceiveMessageFrom(NodeId, NodeId, NetworkMessage),

@@ -10,7 +10,7 @@ pub type ShortID = u32;
 // The only thing we need to know is what transactions a node knows, and what is the size of the difference between that
 // and the set of transaction its peer knows. The difference can be computed on the fly, but it is stored here so we can keep
 // track of the size of the message for statistics.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Sketch {
     tx_set: Vec<ShortID>,
     d: usize,

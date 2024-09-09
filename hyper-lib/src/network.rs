@@ -10,7 +10,7 @@ use rand::distributions::{Distribution, Uniform};
 use rand::rngs::StdRng;
 
 /// Defines the collection of network messages that can be exchanged between peers
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum NetworkMessage {
     INV(Vec<TxId>),
     GETDATA(Vec<TxId>),
