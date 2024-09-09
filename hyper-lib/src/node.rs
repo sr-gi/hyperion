@@ -37,7 +37,7 @@ struct PoissonTimer {
 }
 
 impl PoissonTimer {
-    pub fn new(mean: u64) -> Self {
+    fn new(mean: u64) -> Self {
         Self {
             dist: Exp::new(1.0 / mean as f64).unwrap(),
             next_interval: 0,
@@ -46,7 +46,7 @@ impl PoissonTimer {
 
     /// Sample a new value from the distribution. Return values are
     /// represented as nanoseconds
-    pub fn sample(&mut self, rng: &mut StdRng) -> u64 {
+    fn sample(&mut self, rng: &mut StdRng) -> u64 {
         (self.dist.sample(rng) * SECS_TO_NANOS as f64).round() as u64
     }
 }
@@ -65,7 +65,7 @@ pub struct Peer {
 }
 
 impl Peer {
-    pub fn new(is_erlay: bool, is_inbound: bool) -> Self {
+    fn new(is_erlay: bool, is_inbound: bool) -> Self {
         let tx_reconciliation_state = if is_erlay {
             // Connection initiators match reconciliation initiators
             // https://github.com/bitcoin/bips/blob/master/bip-0330.mediawiki#sendtxrcncl
@@ -91,30 +91,30 @@ impl Peer {
         }
     }
 
-    pub fn add_tx_to_be_announced(&mut self, txid: TxId) {
+    fn add_tx_to_be_announced(&mut self, txid: TxId) {
         self.to_be_announced.push(txid)
     }
 
-    pub fn drain_txs_to_be_announced(&mut self) -> Vec<TxId> {
+    fn drain_txs_to_be_announced(&mut self) -> Vec<TxId> {
         self.to_be_announced.drain(..).collect()
     }
 
-    pub fn is_erlay(&self) -> bool {
+    fn is_erlay(&self) -> bool {
         self.tx_reconciliation_state.is_some()
     }
 
-    pub fn add_tx_to_reconcile(&mut self, txid: TxId) -> bool {
+    fn add_tx_to_reconcile(&mut self, txid: TxId) -> bool {
         self.tx_reconciliation_state
             .as_mut()
             .map(|recon_set| recon_set.add_tx(txid))
             .unwrap_or(false)
     }
 
-    pub fn get_tx_reconciliation_state(&self) -> Option<&TxReconciliationState> {
+    fn get_tx_reconciliation_state(&self) -> Option<&TxReconciliationState> {
         self.tx_reconciliation_state.as_ref()
     }
 
-    pub fn get_tx_reconciliation_state_mut(&mut self) -> Option<&mut TxReconciliationState> {
+    fn get_tx_reconciliation_state_mut(&mut self) -> Option<&mut TxReconciliationState> {
         self.tx_reconciliation_state.as_mut()
     }
 }

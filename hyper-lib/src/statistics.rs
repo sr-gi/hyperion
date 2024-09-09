@@ -11,7 +11,7 @@ struct Data {
 }
 
 impl Data {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self {
             from_inbounds: 0,
             from_outbounds: 0,
