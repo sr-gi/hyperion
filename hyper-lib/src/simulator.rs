@@ -71,6 +71,7 @@ impl Simulator {
     pub fn new(
         reachable_count: usize,
         unreachable_count: usize,
+        num_outbound: usize,
         is_erlay: bool,
         current_time: u64,
         seed: Option<u64>,
@@ -85,7 +86,13 @@ impl Simulator {
             s
         };
         let mut rng: StdRng = StdRng::seed_from_u64(seed);
-        let mut network = Network::new(reachable_count, unreachable_count, is_erlay, &mut rng);
+        let mut network = Network::new(
+            reachable_count,
+            unreachable_count,
+            num_outbound,
+            is_erlay,
+            &mut rng,
+        );
 
         let mut event_queue = PriorityQueue::new();
         if is_erlay {
