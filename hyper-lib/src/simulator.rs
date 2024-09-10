@@ -71,7 +71,7 @@ impl Simulator {
     pub fn new(
         reachable_count: usize,
         unreachable_count: usize,
-        num_outbound: usize,
+        outbounds_count: usize,
         is_erlay: bool,
         current_time: u64,
         seed: Option<u64>,
@@ -89,7 +89,7 @@ impl Simulator {
         let mut network = Network::new(
             reachable_count,
             unreachable_count,
-            num_outbound,
+            outbounds_count,
             is_erlay,
             &mut rng,
         );

@@ -20,7 +20,7 @@ pub struct Cli {
     pub unreachable: usize,
     /// The number of outbound connections established per node.
     #[clap(long, short, default_value_t = MAX_OUTBOUND_CONNECTIONS)]
-    pub num_outbounds: usize,
+    pub outbounds: usize,
     /// Level of verbosity of the messages displayed by the simulator.
     /// Possible values: [off, error, warn, info, debug, trace]
     #[clap(long, short, verbatim_doc_comment, default_value = "info")]
@@ -41,7 +41,7 @@ pub struct Cli {
 
 impl Cli {
     pub fn verify(&self) {
-        assert!(self.reachable >= 10 * self.num_outbounds,
+        assert!(self.reachable >= 10 * self.outbounds,
             "Too few reachable peers. In order to allow enough randomness in the network topology generation, please make sure
             the number of reachable nodes is, at least, 10 times the number of outbound connections per node");
     }

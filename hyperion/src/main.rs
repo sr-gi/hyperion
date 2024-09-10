@@ -22,7 +22,7 @@ fn main() -> anyhow::Result<()> {
     let mut simulator = Simulator::new(
         cli.reachable,
         cli.unreachable,
-        cli.num_outbounds,
+        cli.outbounds,
         cli.erlay,
         start_time,
         cli.seed,

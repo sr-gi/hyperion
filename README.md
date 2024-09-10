@@ -39,7 +39,7 @@ Options:
           The number of reachable nodes in the simulated network [default: 10000]
   -u, --unreachable <UNREACHABLE>
           The number of unreachable nodes in the simulated network [default: 100000]
-  -n, --num-outbounds <NUM_OUTBOUNDS>
+  -o, outbounds_count <OUTBOUNDS_COUNT>
           The number of outbound connections established per node [default: 8]
   -l, --log-level <LOG_LEVEL>
           Level of verbosity of the messages displayed by the simulator.

@@ -116,7 +116,7 @@ impl Network {
     pub fn new(
         reachable_count: usize,
         unreachable_count: usize,
-        num_outbounds: usize,
+        outbounds_count: usize,
         is_erlay: bool,
         rng: &mut StdRng,
     ) -> Self {
@@ -139,12 +139,12 @@ impl Network {
 
         log::info!(
             "Connecting unreachable nodes to reachable ({} connections)",
-            unreachable_count * num_outbounds
+            unreachable_count * outbounds_count
         );
         Network::connect_unreachable(
             &mut unreachable_nodes,
             &mut reachable_nodes,
-            num_outbounds,
+            outbounds_count,
             is_erlay,
             rng,
             &peers_die,
@@ -152,11 +152,11 @@ impl Network {
 
         log::info!(
             "Connecting reachable nodes to reachable ({} connections)",
-            reachable_count * num_outbounds
+            reachable_count * outbounds_count
         );
         Network::connect_reachable(
             &mut reachable_nodes,
-            num_outbounds,
+            outbounds_count,
             is_erlay,
             rng,
             &peers_die,
@@ -177,14 +177,14 @@ impl Network {
     fn connect_unreachable(
         unreachable_nodes: &mut [Node],
         reachable_nodes: &mut [Node],
-        num_outbounds: usize,
+        outbounds_count: usize,
         are_erlay: bool,
         rng: &mut StdRng,
         dist: &Uniform<NodeId>,
     ) {
         for node in unreachable_nodes.iter_mut() {
             let mut already_connected_to = HashSet::new();
-            for _ in 0..num_outbounds {
+            for _ in 0..outbounds_count {
                 let peer_id = Network::get_peer_to_connect(&mut already_connected_to, rng, dist);
                 node.connect(peer_id, are_erlay);
                 reachable_nodes
@@ -202,7 +202,7 @@ impl Network {
     /// Nodes to be connected to are picked at random given an uniform distribution [dist]
     fn connect_reachable(
         reachable_nodes: &mut [Node],
-        num_outbounds: usize,
+        outbounds_count: usize,
         are_erlay: bool,
         rng: &mut StdRng,
         dist: &Uniform<NodeId>,
@@ -215,7 +215,7 @@ impl Network {
                 .collect::<HashSet<_>>();
             already_connected_to.insert(node_id);
 
-            for _ in 0..num_outbounds {
+            for _ in 0..outbounds_count {
                 let peer_id = Network::get_peer_to_connect(&mut already_connected_to, rng, dist);
 
                 let (node, peer) = if peer_id < node_id {
