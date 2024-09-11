@@ -1,4 +1,5 @@
 use clap::Parser;
+use indicatif::{ProgressIterator, ProgressStyle};
 use log::LevelFilter;
 use simple_logger::SimpleLogger;
 use std::time;
@@ -42,7 +43,16 @@ fn main() -> anyhow::Result<()> {
     let mut overall_time = 0;
     let mut txid = simulator.get_random_txid();
     let mut sent_txs = Vec::new();
-    for _ in 0..cli.n {
+    // Display a progress bar only if we are running in multi-simulation mode
+    let sty = ProgressStyle::with_template(if cli.n > 1 {
+        "Simulating [{wide_bar:.cyan/blue} {pos:>2}/{len:2}] {elapsed_precise}"
+    } else {
+        ""
+    })
+    .unwrap()
+    .progress_chars("##-");
+
+    for _ in (0..cli.n).progress().with_style(sty) {
         // For statistical purposes
         let mut nodes_reached = 1;
         let mut percentile_time = 0;
