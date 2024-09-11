@@ -39,7 +39,7 @@ Options:
           The number of reachable nodes in the simulated network [default: 10000]
   -u, --unreachable <UNREACHABLE>
           The number of unreachable nodes in the simulated network [default: 100000]
-  -o, outbounds_count <OUTBOUNDS_COUNT>
+  -o, --outbounds <OUTBOUNDS>
           The number of outbound connections established per node [default: 8]
   -l, --log-level <LOG_LEVEL>
           Level of verbosity of the messages displayed by the simulator.
@@ -52,6 +52,8 @@ Options:
           Seed to run random activity generator deterministically
       --no-latency
           Don't add network latency to messages exchanges between peers. Useful for debugging
+  -n, --n <N>
+          Number of times the simulation will be repeated. Smooths the statistical results [default: 1]
   -h, --help
           Print help
   -V, --version

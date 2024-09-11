@@ -37,6 +37,9 @@ pub struct Cli {
     /// Don't add network latency to messages exchanges between peers. Useful for debugging
     #[clap(long)]
     pub no_latency: bool,
+    /// Number of times the simulation will be repeated. Smooths the statistical results
+    #[clap(long, short, default_value_t = 1)]
+    pub n: u32,
 }
 
 impl Cli {

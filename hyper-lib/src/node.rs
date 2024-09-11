@@ -166,6 +166,7 @@ impl Node {
             node_statistics: NodeStatistics::new(),
         }
     }
+
     /// Gets the next discrete time when a transaction announcement needs to be sent to a given peer.
     /// A [peer_id] is required if the query is performed for an outbound peer, otherwise the request is
     /// assumed to be for inbounds. The method will sample a new time if we have reached the old sample,

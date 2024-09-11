@@ -109,6 +109,7 @@ impl std::fmt::Display for NetworkMessage {
 pub struct Network {
     /// Collection of nodes that composes the simulated network
     nodes: Vec<Node>,
+    is_erlay: bool,
     reachable_count: usize,
 }
 
@@ -138,8 +139,8 @@ impl Network {
         let peers_die = Uniform::from(0..reachable_nodes.len());
 
         log::info!(
-            "Connecting unreachable nodes to reachable ({} connections)",
-            unreachable_count * outbounds_count
+            "Connecting unreachable nodes to reachable ({} outbounds per node)",
+            outbounds_count
         );
         Network::connect_unreachable(
             &mut unreachable_nodes,
@@ -151,8 +152,8 @@ impl Network {
         );
 
         log::info!(
-            "Connecting reachable nodes to reachable ({} connections)",
-            reachable_count * outbounds_count
+            "Connecting reachable nodes to reachable ({} outbounds per node)",
+            outbounds_count
         );
         Network::connect_reachable(
             &mut reachable_nodes,
@@ -162,13 +163,23 @@ impl Network {
             &peers_die,
         );
 
+        log::info!(
+            "Created a total of {} links between nodes",
+            (unreachable_count + reachable_count) * outbounds_count
+        );
+
         let mut nodes = reachable_nodes;
         nodes.extend(unreachable_nodes);
 
         Self {
             nodes,
+            is_erlay,
             reachable_count,
         }
+    }
+
+    pub fn is_erlay(&self) -> bool {
+        self.is_erlay
     }
 
     /// Connects a collection of unreachable nodes to a collection of reachable ones.
