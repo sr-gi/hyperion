@@ -71,9 +71,8 @@ impl Simulator {
     pub fn new(
         reachable_count: usize,
         unreachable_count: usize,
-        num_outbound: usize,
+        outbounds_count: usize,
         is_erlay: bool,
-        current_time: u64,
         seed: Option<u64>,
         network_latency: bool,
     ) -> Self {
@@ -86,27 +85,13 @@ impl Simulator {
             s
         };
         let mut rng: StdRng = StdRng::seed_from_u64(seed);
-        let mut network = Network::new(
+        let network = Network::new(
             reachable_count,
             unreachable_count,
-            num_outbound,
+            outbounds_count,
             is_erlay,
             &mut rng,
         );
-
-        let mut event_queue = PriorityQueue::new();
-        if is_erlay {
-            for node in network.get_nodes_mut() {
-                // Schedule transaction reconciliation here. As opposite to fanout, reconciliation is scheduled
-                // on a fixed interval. This means that we need to start it when the connection is made. However,
-                // in the simulator, the whole network is build at the same (discrete) time. This does not follow
-                // reality, so we will pick a random value between the simulation start time (current_time) and
-                // RECON_REQUEST_INTERVAL as the first scheduled reconciliation for each connection.
-                let delta = rng.gen_range(0..RECON_REQUEST_INTERVAL * SECS_TO_NANOS);
-                let (e, t) = node.schedule_set_reconciliation(current_time + delta);
-                event_queue.push(e, Reverse(t));
-            }
-        }
 
         // Create a network latency function for sent/received messages. This is in the order of
         // nanoseconds, using a LogNormal distribution with expected value NET_LATENCY_MEAN, and
@@ -121,7 +106,24 @@ impl Simulator {
             rng,
             net_latency_fn,
             network,
-            event_queue,
+            event_queue: PriorityQueue::new(),
+        }
+    }
+
+    pub fn schedule_set_reconciliation(&mut self, current_time: u64) {
+        if self.network.is_erlay() {
+            for node in self.network.get_nodes_mut() {
+                // Schedule transaction reconciliation here. As opposite to fanout, reconciliation is scheduled
+                // on a fixed interval. This means that we need to start it when the connection is made. However,
+                // in the simulator, the whole network is build at the same (discrete) time. This does not follow
+                // reality, so we will pick a random value between the simulation start time (current_time) and
+                // RECON_REQUEST_INTERVAL as the first scheduled reconciliation for each connection.
+                let delta = self
+                    .rng
+                    .gen_range(0..RECON_REQUEST_INTERVAL * SECS_TO_NANOS);
+                let (e, t) = node.schedule_set_reconciliation(current_time + delta);
+                self.event_queue.push(e, Reverse(t));
+            }
         }
     }
 
