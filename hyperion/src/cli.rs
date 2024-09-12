@@ -25,10 +25,10 @@ pub struct Cli {
     /// Possible values: [off, error, warn, info, debug, trace]
     #[clap(long, short, verbatim_doc_comment, default_value = "info")]
     pub log_level: LevelFilter,
-    /// Target percentile of node the transaction needs to reach. Use to measure propagation times
+    /// Propagation percentile target. Use to measure transaction propagation times
     #[clap(long, short, default_value_t = TARGET_PERCENTILE, value_parser = clap::value_parser!(u16).range(1..101))]
     pub percentile_target: u16,
-    /// Whether nodes in the simulation support Erlay or not (all of them for now, this is likely to change)
+    /// Whether or not nodes in the simulation support Erlay (all of them for now, this is likely to change)
     #[clap(long)]
     pub erlay: bool,
     /// Seed to run random activity generator deterministically
