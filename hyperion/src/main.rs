@@ -31,7 +31,15 @@ fn main() -> anyhow::Result<()> {
 
     // Pick a (source) node to broadcast the target transaction from.
     let source_node_id = simulator.get_random_nodeid();
-    log::info!("Starting simulation: broadcasting transaction from node {source_node_id}");
+    let reachable_source = source_node_id < cli.reachable;
+    log::info!(
+        "Starting simulation: broadcasting transaction from node {source_node_id} ({})",
+        if reachable_source {
+            "reachable"
+        } else {
+            "unreachable"
+        }
+    );
     if cli.n > 1 {
         log::info!(
             "The simulation will be run {} times and results will be averaged",
@@ -153,6 +161,10 @@ fn main() -> anyhow::Result<()> {
 
         assert_ne!(percentile_time, 0);
         overall_time += percentile_time;
+
+        for node in simulator.network.get_nodes_mut() {
+            node.reset_timers();
+        }
     }
 
     let avg_percentile_time = (overall_time as f32 / cli.n as f32).round() as u64;
