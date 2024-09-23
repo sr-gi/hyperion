@@ -19,11 +19,12 @@ The transaction relaying logic follows Bitcoin Core's design:
     - For outbounds, the delay follows a Poisson process with an expected value of `OUTBOUND_INVENTORY_BROADCAST_INTERVAL(2s)`. Every outbound has a unique timer
 - `GETDATA`s are prioritized to outbound peers, hence if an inbound peer announces a transaction, the request will be delayed by `NONPREF_PEER_TX_DELAY(2s)`, and superseded by any other request by an outbound peer<sup>1</sup>
 - `REQRECON` messages are sent on a fix timer, in a round-robin fashion every `RECON_REQUEST_INTERVAL(8s)`, meaning each request will go out every `8/n`s where `n` is the outbound peer count of the node
-- `SKETCH`es exchanged between peers contain transactions as long as those would have been requestable by the peer at the time of sharing the sketch (this means if an `INV` containing such transaction would have been created)
+- `SKETCH`es exchanged between peers contain transactions as long as those would have been requestable by the peer at the time of sharing the sketch (this means if an `INV` containing such transaction would have been created <sup>2</sup>)
 
 All messages exchanged between peers are added some network latency, which is sampled at random from a Log Normal distribution with expected value of `10ms` and variance of `2ms`.
 
 <sup>1</sup> Notice `GETDATA` requests are not queued, given nodes are well behaved, a node announcing a transaction and getting a `GETDATA` request back will always reply with the corresponding transaction.
+<sup>2</sup> Data is made available at following a Poisson process with smaller expected values than INVS: `INBOUND_INVENTORY_BROADCAST_INTERVAL_RECON(2s) for inbounds` and `OUTBOUND_INVENTORY_BROADCAST_INTERVAL_RECON(1s)` for outbounds and `INBOUND_INVENTORY_BROADCAST_INTERVAL_RECON(2s) for inbounds`
 
 ## Status of the project
 

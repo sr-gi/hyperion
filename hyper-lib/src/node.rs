@@ -16,7 +16,9 @@ use crate::{TxId, SECS_TO_NANOS};
 pub type NodeId = usize;
 
 static INBOUND_INVENTORY_BROADCAST_INTERVAL: u64 = 5;
+static INBOUND_INVENTORY_BROADCAST_INTERVAL_RECON: u64 = 2;
 static OUTBOUND_INVENTORY_BROADCAST_INTERVAL: u64 = 2;
+static OUTBOUND_INVENTORY_BROADCAST_INTERVAL_RECON: u64 = 1;
 static NONPREF_PEER_TX_DELAY: u64 = 2;
 static OUTBOUND_FANOUT_DESTINATIONS: u16 = 1;
 static INBOUND_FANOUT_DESTINATIONS_FRACTION: f64 = 0.1;
@@ -161,7 +163,11 @@ impl Node {
             requested_transactions: HashSet::new(),
             delayed_requests: HashMap::new(),
             known_transactions: HashSet::new(),
-            inbounds_poisson_timer: PoissonTimer::new(INBOUND_INVENTORY_BROADCAST_INTERVAL),
+            inbounds_poisson_timer: PoissonTimer::new(if is_erlay {
+                INBOUND_INVENTORY_BROADCAST_INTERVAL_RECON
+            } else {
+                INBOUND_INVENTORY_BROADCAST_INTERVAL
+            }),
             outbounds_poisson_timers: HashMap::new(),
             node_statistics: NodeStatistics::new(),
         }
@@ -248,7 +254,11 @@ impl Node {
         );
         self.outbounds_poisson_timers.insert(
             peer_id,
-            PoissonTimer::new(OUTBOUND_INVENTORY_BROADCAST_INTERVAL),
+            PoissonTimer::new(if is_erlay {
+                OUTBOUND_INVENTORY_BROADCAST_INTERVAL_RECON
+            } else {
+                OUTBOUND_INVENTORY_BROADCAST_INTERVAL
+            }),
         );
     }
 
@@ -424,7 +434,8 @@ impl Node {
     /// Kickstarts the broadcasting logic for a given transaction to all the node's peers. This includes both fanout and transaction
     /// reconciliation. For peers selected for fanout, an announcement is scheduled based on the peers type.
     /// Inbound peers use a shared Poisson timer with expected value of [INBOUND_INVENTORY_BROADCAST_INTERVAL] seconds,
-    /// while outbound have a unique one with expected value of [OUTBOUND_INVENTORY_BROADCAST_INTERVAL] seconds.
+    /// while outbound have a unique one with expected value of [OUTBOUND_INVENTORY_BROADCAST_INTERVAL] seconds. Erlay nodes use the
+    /// [INBOUND_INVENTORY_BROADCAST_INTERVAL_RECON] and [OUTBOUND_INVENTORY_BROADCAST_INTERVAL_RECON] respectively.
     /// For peers selected for set reconciliation, this transaction is added to their reconciliation sets and will be made available
     /// when the next announcement is processed (this does not generate an event)
     /// Returns a collection of the scheduled events
