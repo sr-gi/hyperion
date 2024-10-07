@@ -4,13 +4,10 @@ use std::hash::Hash;
 use priority_queue::PriorityQueue;
 use rand::rngs::StdRng;
 use rand::{thread_rng, Rng, RngCore, SeedableRng};
-use rand_distr::{Distribution, LogNormal};
 
-use crate::network::{Network, NetworkMessage};
+use crate::network::{Link, Network, NetworkMessage};
 use crate::node::{Node, NodeId, RECON_REQUEST_INTERVAL};
 use crate::{TxId, SECS_TO_NANOS};
-
-static NET_LATENCY_MEAN: f64 = 0.01 * SECS_TO_NANOS as f64; // 10ms
 
 /// An enumeration of all the events that can be created in a simulation
 #[derive(Clone, Hash, Eq, PartialEq, Debug)]
@@ -54,13 +51,20 @@ impl Event {
             _ => None,
         }
     }
+
+    pub fn get_link(&self) -> Option<Link> {
+        match self {
+            Event::ReceiveMessageFrom(a, b, _) => Some((*a, *b).into()),
+            Event::ProcessScheduledAnnouncement(a, b) => Some((*a, *b).into()),
+            Event::ProcessDelayedRequest(a, b) => Some((*a, *b).into()),
+            Event::ProcessScheduledReconciliation(_) => None,
+        }
+    }
 }
 
 pub struct Simulator {
     /// A pre-seeded rng to allow reproducing previous simulation results
     rng: StdRng,
-    /// A function used to generate network latency. Follows a LogNormal distribution over a given value
-    net_latency_fn: Option<LogNormal<f64>>,
     /// The simulated network
     pub network: Network,
     /// A queue of the events that make the simulation, ordered by discrete time
@@ -89,22 +93,13 @@ impl Simulator {
             reachable_count,
             unreachable_count,
             outbounds_count,
+            network_latency,
             is_erlay,
             &mut rng,
         );
 
-        // Create a network latency function for sent/received messages. This is in the order of
-        // nanoseconds, using a LogNormal distribution with expected value NET_LATENCY_MEAN, and
-        // variance of 20% of the expected value
-        let net_latency_fn = if network_latency {
-            Some(LogNormal::from_mean_cv(NET_LATENCY_MEAN, 0.2).unwrap())
-        } else {
-            None
-        };
-
         Self {
             rng,
-            net_latency_fn,
             network,
             event_queue: PriorityQueue::new(),
         }
@@ -130,8 +125,16 @@ impl Simulator {
     /// Adds an event to the event queue, adding random latency if the event is [Event::ReceiveMessageFrom].
     /// These latencies simulate the messages traveling across the network
     pub fn add_event(&mut self, event: Event, mut time: u64) {
-        if self.net_latency_fn.is_some() && event.is_receive_message() {
-            time += self.net_latency_fn.unwrap().sample(&mut self.rng).round() as u64;
+        if event.is_receive_message() && self.network.has_latency() {
+            let link = &event.get_link().unwrap();
+            let latency = self.network.get_links().get(link).unwrap_or_else(|| {
+                panic!(
+                    "No connection found between node: {} and node {}",
+                    link.a(),
+                    link.b(),
+                )
+            });
+            time += latency;
         }
 
         self.event_queue.push(event, Reverse(time));

@@ -1,13 +1,54 @@
 use crate::node::{Node, NodeId};
 use crate::statistics::NetworkStatistics;
 use crate::txreconciliation::{ShortID, Sketch};
-use crate::TxId;
+use crate::{TxId, SECS_TO_NANOS};
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use itertools::Itertools;
-use rand::distributions::{Distribution, Uniform};
 use rand::rngs::StdRng;
+use rand_distr::{Distribution, LogNormal, Uniform};
+
+static NET_LATENCY_MEAN: f64 = 0.01 * SECS_TO_NANOS as f64; // 10ms
+
+/// A network link between nodes.
+/// We are purposely not allowing the default constructor, nor defining a new function
+/// because we want tuples to be created in a specific way. This ensures that querying
+/// (a, b) and (b, a) returns the same value, otherwise, some misses will occur while
+/// accessing the data (e.g. data is added as (a, b) but queried as (b, a))
+#[derive(PartialEq, Eq, Hash)]
+pub struct Link {
+    a: NodeId,
+    b: NodeId,
+}
+
+impl Link {
+    pub fn a(&self) -> &NodeId {
+        &self.a
+    }
+
+    pub fn b(&self) -> &NodeId {
+        &self.b
+    }
+}
+
+impl From<(NodeId, NodeId)> for Link {
+    fn from(value: (NodeId, NodeId)) -> Self {
+        match value.0.cmp(&value.1) {
+            std::cmp::Ordering::Greater => Link {
+                a: value.0,
+                b: value.1,
+            },
+            std::cmp::Ordering::Less => Link {
+                a: value.1,
+                b: value.0,
+            },
+            std::cmp::Ordering::Equal => {
+                panic!("Both node ids are the same. Loops are not allowed")
+            }
+        }
+    }
+}
 
 /// Defines the collection of network messages that can be exchanged between peers
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -109,6 +150,9 @@ impl std::fmt::Display for NetworkMessage {
 pub struct Network {
     /// Collection of nodes that composes the simulated network
     nodes: Vec<Node>,
+    // Links between nodes, with their associated latencies
+    links: HashMap<Link, u64>,
+    network_latency: bool,
     is_erlay: bool,
     reachable_count: usize,
 }
@@ -118,6 +162,7 @@ impl Network {
         reachable_count: usize,
         unreachable_count: usize,
         outbounds_count: usize,
+        network_latency: bool,
         is_erlay: bool,
         rng: &mut StdRng,
     ) -> Self {
@@ -142,7 +187,7 @@ impl Network {
             "Connecting unreachable nodes to reachable ({} outbounds per node)",
             outbounds_count
         );
-        Network::connect_unreachable(
+        let mut link_ids = Network::connect_unreachable(
             &mut unreachable_nodes,
             &mut reachable_nodes,
             outbounds_count,
@@ -155,13 +200,13 @@ impl Network {
             "Connecting reachable nodes to reachable ({} outbounds per node)",
             outbounds_count
         );
-        Network::connect_reachable(
+        link_ids.extend(Network::connect_reachable(
             &mut reachable_nodes,
             outbounds_count,
             is_erlay,
             rng,
             &peers_die,
-        );
+        ));
 
         log::info!(
             "Created a total of {} links between nodes",
@@ -171,8 +216,23 @@ impl Network {
         let mut nodes = reachable_nodes;
         nodes.extend(unreachable_nodes);
 
+        let links: HashMap<Link, u64> = if network_latency {
+            // Create a network latency function for sent/received messages. This is in the order of
+            // nanoseconds, using a LogNormal distribution with expected value NET_LATENCY_MEAN, and
+            // variance of 20% of the expected value
+            let net_latency_fn = LogNormal::from_mean_cv(NET_LATENCY_MEAN, 0.2).unwrap();
+            link_ids
+                .into_iter()
+                .map(|link_id| (link_id, net_latency_fn.sample(rng).round() as u64))
+                .collect()
+        } else {
+            link_ids.into_iter().map(|link_id| (link_id, 0)).collect()
+        };
+
         Self {
             nodes,
+            links,
+            network_latency,
             is_erlay,
             reachable_count,
         }
@@ -192,7 +252,8 @@ impl Network {
         are_erlay: bool,
         rng: &mut StdRng,
         dist: &Uniform<NodeId>,
-    ) {
+    ) -> Vec<Link> {
+        let mut links = Vec::new();
         for node in unreachable_nodes.iter_mut() {
             let mut already_connected_to = HashSet::new();
             for _ in 0..outbounds_count {
@@ -204,8 +265,10 @@ impl Network {
                         panic!("Cannot connect to reachable peer {peer_id}. Peer not found")
                     })
                     .accept_connection(node.get_id(), are_erlay);
+                links.push((node.get_id(), peer_id).into());
             }
         }
+        links
     }
 
     /// Connects a collection of reachable nodes between them.
@@ -217,7 +280,8 @@ impl Network {
         are_erlay: bool,
         rng: &mut StdRng,
         dist: &Uniform<NodeId>,
-    ) {
+    ) -> Vec<Link> {
+        let mut links = Vec::new();
         for node_id in 0..reachable_nodes.len() {
             let mut already_connected_to = reachable_nodes[node_id]
                 .get_inbounds()
@@ -243,8 +307,10 @@ impl Network {
 
                 node.connect(peer_id, are_erlay);
                 peer.accept_connection(node_id, are_erlay);
+                links.push((node.get_id(), peer_id).into());
             }
         }
+        links
     }
 
     /// Utility function get a node we can connect to, given a list of nodes we are already connected to
@@ -304,5 +370,13 @@ impl Network {
                 .sum(),
             self.get_node_count() - self.reachable_count,
         )
+    }
+
+    pub fn has_latency(&self) -> bool {
+        self.network_latency
+    }
+
+    pub fn get_links(&self) -> &HashMap<Link, u64> {
+        &self.links
     }
 }
