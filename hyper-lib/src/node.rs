@@ -751,15 +751,13 @@ impl Node {
         // message event for a peer
         if let Some((event, _)) = &message {
             if let Some(msg) = event.get_message() {
-                if event.is_receive_message() {
-                    debug_log!(
-                        request_time,
-                        self.node_id,
-                        "Sending {msg} to peer {peer_id}"
-                    );
-                    self.node_statistics
-                        .add_sent(msg, self.is_peer_inbounds(&peer_id));
-                }
+                debug_log!(
+                    request_time,
+                    self.node_id,
+                    "Sending {msg} to peer {peer_id}"
+                );
+                self.node_statistics
+                    .add_sent(msg, self.is_peer_inbounds(&peer_id));
             }
         }
 
