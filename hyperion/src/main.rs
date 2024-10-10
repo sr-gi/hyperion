@@ -69,51 +69,52 @@ fn main() -> anyhow::Result<()> {
         // All simulations start at time 0 so we don't have to carry any offset when computing
         // the overall time
         simulator.schedule_set_reconciliation(start_time);
-        for (event, time) in simulator
+        for e in simulator
             .get_node_mut(source_node_id)
             .unwrap()
             .broadcast_tx(txid, start_time)
         {
-            simulator.add_event(event, time);
+            simulator.add_event(e);
         }
 
         // Process events until the queue is empty
-        while let Some((event, event_time)) = simulator.get_next_event() {
+        while let Some(scheduled_event) = simulator.get_next_event() {
+            let (event, current_time) = scheduled_event.into();
             match event {
                 Event::ReceiveMessageFrom(src, dst, msg) => {
                     if msg.is_tx() && percentile_time == 0 {
                         nodes_reached += 1;
                         if nodes_reached as f32 >= target_node_count {
-                            percentile_time = event_time;
+                            percentile_time = current_time;
                         }
                     }
-                    for (future_event, future_time) in simulator
+                    for future_event in simulator
                         .network
                         .get_node_mut(dst)
                         .unwrap()
-                        .receive_message_from(msg, src, event_time)
+                        .receive_message_from(msg, src, current_time)
                     {
-                        simulator.add_event(future_event, future_time);
+                        simulator.add_event(future_event);
                     }
                 }
                 Event::ProcessScheduledAnnouncement(src, dst) => {
-                    if let Some((scheduled_event, t)) = simulator
+                    if let Some(scheduled_event) = simulator
                         .network
                         .get_node_mut(src)
                         .unwrap()
-                        .process_scheduled_announcement(dst, event_time)
+                        .process_scheduled_announcement(dst, current_time)
                     {
-                        simulator.add_event(scheduled_event, t);
+                        simulator.add_event(scheduled_event);
                     }
                 }
                 Event::ProcessDelayedRequest(target, txid) => {
-                    if let Some((delayed_event, next_interval)) = simulator
+                    if let Some(delayed_event) = simulator
                         .network
                         .get_node_mut(target)
                         .unwrap()
-                        .process_delayed_request(txid, event_time)
+                        .process_delayed_request(txid, current_time)
                     {
-                        simulator.add_event(delayed_event, next_interval);
+                        simulator.add_event(delayed_event);
                     }
                 }
                 Event::ProcessScheduledReconciliation(src) => {
@@ -132,13 +133,13 @@ fn main() -> anyhow::Result<()> {
                     {
                         // Processing an scheduled reconciliation will return the reconciliation flow
                         // start, plus the scheduling of the next reconciliation (with the next peer in line)
-                        let ((rec_req, req_time), (next_event, future_time)) = simulator
+                        let (rec_req, next_event) = simulator
                             .network
                             .get_node_mut(src)
                             .unwrap()
-                            .process_scheduled_reconciliation(event_time);
-                        simulator.add_event(rec_req, req_time);
-                        simulator.add_event(next_event, future_time);
+                            .process_scheduled_reconciliation(current_time);
+                        simulator.add_event(rec_req);
+                        simulator.add_event(next_event);
                     }
                 }
             }

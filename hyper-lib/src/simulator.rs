@@ -1,7 +1,7 @@
-use std::cmp::Reverse;
+use std::cmp::{Ordering, Reverse};
+use std::collections::BinaryHeap;
 use std::hash::Hash;
 
-use priority_queue::PriorityQueue;
 use rand::rngs::StdRng;
 use rand::{thread_rng, Rng, RngCore, SeedableRng};
 
@@ -62,13 +62,52 @@ impl Event {
     }
 }
 
+#[derive(Clone, Eq, PartialEq)]
+pub struct ScheduledEvent {
+    pub inner: Event,
+    time: Reverse<u64>,
+}
+
+impl ScheduledEvent {
+    pub fn new(event: Event, time: u64) -> Self {
+        ScheduledEvent {
+            inner: event,
+            time: Reverse(time),
+        }
+    }
+
+    pub fn time(&self) -> u64 {
+        self.time.0
+    }
+}
+
+impl Ord for ScheduledEvent {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.time.cmp(&other.time)
+    }
+}
+
+// `PartialOrd` needs to be implemented as well.
+impl PartialOrd for ScheduledEvent {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl From<ScheduledEvent> for (Event, u64) {
+    fn from(event: ScheduledEvent) -> Self {
+        let t = event.time();
+        (event.inner, t)
+    }
+}
+
 pub struct Simulator {
     /// A pre-seeded rng to allow reproducing previous simulation results
     rng: StdRng,
     /// The simulated network
     pub network: Network,
     /// A queue of the events that make the simulation, ordered by discrete time
-    event_queue: PriorityQueue<Event, Reverse<u64>>,
+    event_queue: BinaryHeap<ScheduledEvent>,
 }
 
 impl Simulator {
@@ -101,7 +140,7 @@ impl Simulator {
         Self {
             rng,
             network,
-            event_queue: PriorityQueue::new(),
+            event_queue: BinaryHeap::new(),
         }
     }
 
@@ -116,33 +155,34 @@ impl Simulator {
                 let delta = self
                     .rng
                     .gen_range(0..RECON_REQUEST_INTERVAL * SECS_TO_NANOS);
-                let (e, t) = node.schedule_set_reconciliation(current_time + delta);
-                self.event_queue.push(e, Reverse(t));
+                self.event_queue
+                    .push(node.schedule_set_reconciliation(current_time + delta));
             }
         }
     }
 
     /// Adds an event to the event queue, adding random latency if the event is [Event::ReceiveMessageFrom].
     /// These latencies simulate the messages traveling across the network
-    pub fn add_event(&mut self, event: Event, mut time: u64) {
+    pub fn add_event(&mut self, mut scheduled_event: ScheduledEvent) {
+        let event = &scheduled_event.inner;
         if event.is_receive_message() && self.network.has_latency() {
             let link = &event.get_link().unwrap();
-            let latency = self.network.get_links().get(link).unwrap_or_else(|| {
+            let latency = *self.network.get_links().get(link).unwrap_or_else(|| {
                 panic!(
                     "No connection found between node: {} and node {}",
                     link.a(),
                     link.b(),
                 )
             });
-            time += latency;
+            scheduled_event.time.0 += latency;
         }
 
-        self.event_queue.push(event, Reverse(time));
+        self.event_queue.push(scheduled_event);
     }
 
     /// Get the next event to be processed, as in the one with the smallest discrete time
-    pub fn get_next_event(&mut self) -> Option<(Event, u64)> {
-        self.event_queue.pop().map(|(e, t)| (e, t.0))
+    pub fn get_next_event(&mut self) -> Option<ScheduledEvent> {
+        self.event_queue.pop()
     }
 
     pub fn get_random_txid(&mut self) -> TxId {

@@ -8,7 +8,7 @@ use rand_distr::{Distribution, Exp};
 
 use crate::indexedmap::IndexedMap;
 use crate::network::NetworkMessage;
-use crate::simulator::Event;
+use crate::simulator::{Event, ScheduledEvent};
 use crate::statistics::NodeStatistics;
 use crate::txreconciliation::TxReconciliationState;
 use crate::{TxId, SECS_TO_NANOS};
@@ -384,7 +384,7 @@ impl Node {
         txid: TxId,
         peers: Vec<NodeId>,
         current_time: u64,
-    ) -> Vec<(Event, u64)> {
+    ) -> Vec<ScheduledEvent> {
         let mut events = Vec::new();
         for peer_id in peers {
             // Do not send the transaction to peers that already know about it (e.g. the peer that sent it to us)
@@ -420,7 +420,7 @@ impl Node {
             // Notice reconciliation requests are not on a poisson timer, they are triggered every fix interval.
             // However, transactions are made available to reconcile following the peer's poisson timer (check
             // [TxReconciliationState::make_snapshot])
-            events.push((
+            events.push(ScheduledEvent::new(
                 Event::process_scheduled_announcement(self.node_id, peer_id),
                 next_interval,
             ));
@@ -435,7 +435,7 @@ impl Node {
     /// For peers selected for set reconciliation, this transaction is added to their reconciliation sets and will be made available
     /// when the next announcement is processed (this does not generate an event)
     /// Returns a collection of the scheduled events
-    pub fn broadcast_tx(&mut self, txid: TxId, current_time: u64) -> Vec<(Event, u64)> {
+    pub fn broadcast_tx(&mut self, txid: TxId, current_time: u64) -> Vec<ScheduledEvent> {
         self.add_known_transaction(txid);
 
         let mut events = self.schedule_tx_announcement(
@@ -454,12 +454,12 @@ impl Node {
 
     /// Reconciliation requests, as opposed to INVs, are sent on a schedule, no matter if we have transactions to reconcile or not
     /// (since our peer may have and we are unaware of this). Schedule the next reconciliation request.
-    pub fn schedule_set_reconciliation(&mut self, request_time: u64) -> (Event, u64) {
+    pub fn schedule_set_reconciliation(&mut self, request_time: u64) -> ScheduledEvent {
         // Make it so we reconcile with all peers every RECON_REQUEST_INTERVAL
         let delta = ((RECON_REQUEST_INTERVAL as f64 / self.out_peers.len() as f64)
             * SECS_TO_NANOS as f64)
             .round() as u64;
-        (
+        ScheduledEvent::new(
             Event::process_scheduled_reconciliation(self.node_id),
             request_time + delta,
         )
@@ -469,7 +469,7 @@ impl Node {
     pub fn process_scheduled_reconciliation(
         &mut self,
         request_time: u64,
-    ) -> ((Event, u64), (Event, u64)) {
+    ) -> (ScheduledEvent, ScheduledEvent) {
         // Peers are selected for set reconciliation in a round robin manner. This is managed internally by our IndexedMap
         let (next_peer_id, next_peer) = self.out_peers.get_next();
         debug_log!(
@@ -504,7 +504,7 @@ impl Node {
         &mut self,
         peer_id: NodeId,
         current_time: u64,
-    ) -> Option<(Event, u64)> {
+    ) -> Option<ScheduledEvent> {
         let peer = self.get_peer_mut(&peer_id).unwrap();
 
         // Make transactions that could have been announced via fanout available for reconciliation. Transactions added to the
@@ -540,7 +540,7 @@ impl Node {
         txids: Vec<TxId>,
         peer_id: NodeId,
         request_time: u64,
-    ) -> Option<(Event, u64)> {
+    ) -> Option<ScheduledEvent> {
         let to_be_requested = self
             .filter_known_and_requested_transactions(txids.iter())
             .copied()
@@ -576,7 +576,7 @@ impl Node {
                     }
                 };
             }
-            Some((
+            Some(ScheduledEvent::new(
                 Event::process_delayed_request(self.node_id, peer_id),
                 request_time + NONPREF_PEER_TX_DELAY * SECS_TO_NANOS,
             ))
@@ -588,7 +588,7 @@ impl Node {
                 to_be_requested.iter().format(", ")
             );
             self.requested_transactions.extend(to_be_requested.iter());
-            Some((
+            Some(ScheduledEvent::new(
                 Event::receive_message_from(
                     self.node_id,
                     peer_id,
@@ -607,7 +607,7 @@ impl Node {
         &mut self,
         peer_id: NodeId,
         request_time: u64,
-    ) -> Option<(Event, u64)> {
+    ) -> Option<ScheduledEvent> {
         let pending = self.delayed_requests.remove(&peer_id).unwrap_or_else(|| {
             panic!("Trying to process an non-existing delayed request for peer_id: {peer_id}")
         });
@@ -629,7 +629,7 @@ impl Node {
         let msg = NetworkMessage::GETDATA(to_be_requested);
         self.node_statistics.add_sent(&msg, true);
 
-        Some((
+        Some(ScheduledEvent::new(
             Event::receive_message_from(self.node_id, peer_id, msg),
             request_time,
         ))
@@ -642,7 +642,7 @@ impl Node {
         msg: NetworkMessage,
         peer_id: NodeId,
         request_time: u64,
-    ) -> Option<(Event, u64)> {
+    ) -> Option<ScheduledEvent> {
         if msg.is_erlay() {
             assert!(
                 self.is_erlay,
@@ -653,7 +653,7 @@ impl Node {
                 "Trying to send an Erlay message to a peer (node_id: {peer_id}), but the it hasn't signaled Erlay support"
             );
         }
-        let message: Option<(Event, u64)>;
+        let message: Option<ScheduledEvent>;
 
         if let Some(peer) = self.get_peer(&peer_id) {
             match msg {
@@ -664,7 +664,7 @@ impl Node {
                         assert!(!peer.knows_transaction(txid), "Trying to announce a transaction (txid: {txid:x}) to a peer that already knows about it (peer_id: {peer_id})");
                     }
 
-                    message = Some((
+                    message = Some(ScheduledEvent::new(
                         Event::receive_message_from(self.node_id, peer_id, msg),
                         request_time,
                     ));
@@ -685,7 +685,7 @@ impl Node {
                         .unwrap()
                         .add_known_transaction(txid);
 
-                    message = Some((
+                    message = Some(ScheduledEvent::new(
                         Event::receive_message_from(self.node_id, peer_id, msg),
                         request_time,
                     ));
@@ -705,7 +705,7 @@ impl Node {
                         .get_tx_reconciliation_state_mut()
                         .unwrap()
                         .set_reconciling();
-                    message = Some((
+                    message = Some(ScheduledEvent::new(
                         Event::receive_message_from(self.node_id, peer_id, msg),
                         request_time,
                     ))
@@ -718,7 +718,7 @@ impl Node {
                     for txid in sketch.get_tx_set() {
                         assert!(self.knows_transaction(txid), "Trying to send a sketch containing transaction (txid: {txid:x}) to a peer (peer_id: {peer_id}) but we should't know about it");
                     }
-                    message = Some((
+                    message = Some(ScheduledEvent::new(
                         Event::receive_message_from(self.node_id, peer_id, msg),
                         request_time,
                     ))
@@ -735,7 +735,7 @@ impl Node {
                         .get_tx_reconciliation_state_mut()
                         .unwrap()
                         .clear();
-                    message = Some((
+                    message = Some(ScheduledEvent::new(
                         Event::receive_message_from(self.node_id, peer_id, msg),
                         request_time,
                     ))
@@ -749,8 +749,8 @@ impl Node {
 
         // Only update the "sent" node stats if we are creating a "receive from"
         // message event for a peer
-        if let Some((event, _)) = &message {
-            if let Some(msg) = event.get_message() {
+        if let Some(event) = &message {
+            if let Some(msg) = event.inner.get_message() {
                 debug_log!(
                     request_time,
                     self.node_id,
@@ -771,7 +771,7 @@ impl Node {
         msg: NetworkMessage,
         peer_id: NodeId,
         request_time: u64,
-    ) -> Vec<(Event, u64)> {
+    ) -> Vec<ScheduledEvent> {
         assert!(
             self.get_peer(&peer_id).is_some(),
             "Received an message from a node we are not connected to (node_id: {peer_id})"
@@ -1236,9 +1236,9 @@ mod test_node {
         let txid = get_random_txid();
         let events = node.schedule_tx_announcement(txid, outbound_peer_ids.clone(), 0);
         assert_eq!(events.len(), outbound_peer_ids.len());
-        for (e, _) in events {
-            assert!(matches!(e, Event::ProcessScheduledAnnouncement(..)));
-            if let Event::ProcessScheduledAnnouncement(src, dst) = e {
+        for e in events {
+            assert!(matches!(e.inner, Event::ProcessScheduledAnnouncement(..)));
+            if let Event::ProcessScheduledAnnouncement(src, dst) = e.inner {
                 assert_eq!(src, node_id);
                 assert!(outbound_peer_ids.contains(&dst));
                 assert!(node
@@ -1271,11 +1271,11 @@ mod test_node {
         let txid = get_random_txid();
         let events = node.schedule_tx_announcement(txid, outbound_peer_ids.clone(), current_time);
         assert_eq!(events.len(), outbound_peer_ids.len());
-        for (e, t) in events {
-            assert!(matches!(e, Event::ProcessScheduledAnnouncement(..)));
+        for e in events {
+            assert!(matches!(e.inner, Event::ProcessScheduledAnnouncement(..)));
             // Events are all in the future
-            assert!(t > current_time);
-            if let Event::ProcessScheduledAnnouncement(src, dst) = e {
+            assert!(e.time() > current_time);
+            if let Event::ProcessScheduledAnnouncement(src, dst) = e.inner {
                 assert_eq!(src, node_id);
                 assert!(outbound_peer_ids.contains(&dst));
                 // The transaction is added to to_be_announced or to the recon_set depending on should_fanout_to
@@ -1328,11 +1328,11 @@ mod test_node {
         let events = node.broadcast_tx(txid, 0);
         assert!(node.knows_transaction(&txid));
 
-        for (e, t) in events {
+        for e in events {
             // Events are all in the future
-            assert!(t > current_time);
-            assert!(matches!(e, Event::ProcessScheduledAnnouncement(..)));
-            if let Event::ProcessScheduledAnnouncement(src, dst) = e {
+            assert!(e.time() > current_time);
+            assert!(matches!(e.inner, Event::ProcessScheduledAnnouncement(..)));
+            if let Event::ProcessScheduledAnnouncement(src, dst) = e.inner {
                 assert_eq!(src, node_id);
                 assert!(outbound_peer_ids.contains(&dst) || inbound_peer_ids.contains(&dst));
             }
@@ -1358,10 +1358,10 @@ mod test_node {
             }
 
             // Check the schedule (we use request_time=0 for simplicity)
-            let (e, t) = node.schedule_set_reconciliation(current_time);
-            assert!(matches!(e, Event::ProcessScheduledReconciliation(..)));
+            let e = node.schedule_set_reconciliation(current_time);
+            assert!(matches!(e.inner, Event::ProcessScheduledReconciliation(..)));
             assert_eq!(
-                t,
+                e.time(),
                 (RECON_REQUEST_INTERVAL / *peers_size as u64) * SECS_TO_NANOS
             )
         }
@@ -1400,16 +1400,16 @@ mod test_node {
 
             // Check that we receive the two events we are expecting, and that reconciliation request (former event)
             // contains the corresponding short id for each peer
-            assert!(matches!(req_recon.0, Event::ReceiveMessageFrom(..)));
+            assert!(matches!(req_recon.inner, Event::ReceiveMessageFrom(..)));
             assert!(matches!(
-                req_recon.0.get_message().unwrap(),
+                req_recon.inner.get_message().unwrap(),
                 NetworkMessage::REQRECON(..)
             ));
-            if let NetworkMessage::REQRECON(ids) = req_recon.0.get_message().unwrap() {
+            if let NetworkMessage::REQRECON(ids) = req_recon.inner.get_message().unwrap() {
                 assert_eq!(ids, to_be_reconciled.get(peer_id).unwrap());
             }
             assert!(matches!(
-                scheduled_recon.0,
+                scheduled_recon.inner,
                 Event::ProcessScheduledReconciliation(..)
             ))
         }
@@ -1476,8 +1476,8 @@ mod test_node {
         let inv_event = node
             .process_scheduled_announcement(peer_id, current_time)
             .unwrap();
-        assert!(matches!(inv_event.0, Event::ReceiveMessageFrom(..)));
-        if let NetworkMessage::INV(ids) = inv_event.0.get_message().unwrap() {
+        assert!(matches!(inv_event.inner, Event::ReceiveMessageFrom(..)));
+        if let NetworkMessage::INV(ids) = inv_event.inner.get_message().unwrap() {
             assert_eq!(ids, &to_be_announced);
         }
 
@@ -1518,16 +1518,16 @@ mod test_node {
 
         // All transactions we are unaware of will be requested (all of them in this case) to outbound peers
         let txs = (0..5).map(|_| get_random_txid()).collect::<Vec<_>>();
-        let (e, t) = node
+        let e = node
             .add_request(txs.clone(), outbound_id, current_time)
             .unwrap();
-        assert!(e.is_receive_message());
-        if let Event::ReceiveMessageFrom(s, d, m) = e {
+        assert_eq!(e.time(), current_time);
+        assert!(e.inner.is_receive_message());
+        if let Event::ReceiveMessageFrom(s, d, m) = e.inner {
             assert_eq!(s, node_id);
             assert_eq!(d, outbound_id);
             assert_eq!(m, NetworkMessage::GETDATA(txs.clone()))
         }
-        assert_eq!(t, current_time);
         for txid in txs.iter() {
             assert!(node.requested_transactions.contains(txid));
         }
@@ -1551,11 +1551,11 @@ mod test_node {
         // If the peer is inbound instead of outbounds, the request is delayed instead of processed straightaway
         let txs = (0..5).map(|_| get_random_txid()).collect::<Vec<_>>();
         assert!(!node.delayed_requests.contains_key(&inbound_id));
-        let (e, t) = node
+        let e = node
             .add_request(txs.clone(), inbound_id, current_time)
             .unwrap();
-        assert_eq!(e, Event::ProcessDelayedRequest(node_id, inbound_id));
-        assert!(t > current_time);
+        assert_eq!(e.inner, Event::ProcessDelayedRequest(node_id, inbound_id));
+        assert!(e.time() > current_time);
         // Transactions are kept in the delayed_requests collection for future processing
         assert!(node.delayed_requests.contains_key(&inbound_id));
         assert_eq!(node.delayed_requests.get(&inbound_id).unwrap(), &txs);
@@ -1575,12 +1575,12 @@ mod test_node {
         node.add_request(txs.clone(), inbound_id, current_time);
         assert!(node.delayed_requests.contains_key(&inbound_id));
         // Process the delayed request
-        let (e, _) = node
+        let e = node
             .process_delayed_request(inbound_id, current_time)
             .unwrap();
         assert!(!node.delayed_requests.contains_key(&inbound_id));
-        assert!(e.is_receive_message());
-        if let Event::ReceiveMessageFrom(s, d, m) = e {
+        assert!(e.inner.is_receive_message());
+        if let Event::ReceiveMessageFrom(s, d, m) = e.inner {
             assert_eq!(s, node_id);
             assert_eq!(d, inbound_id);
             assert_eq!(m, NetworkMessage::GETDATA(txs.clone()))
@@ -1597,12 +1597,12 @@ mod test_node {
         // Flag one as already known
         node.add_known_transaction(*txs.first().unwrap());
         // Process
-        let (e, _) = node
+        let e = node
             .process_delayed_request(inbound_id, current_time)
             .unwrap();
         assert!(!node.delayed_requests.contains_key(&inbound_id));
-        assert!(e.is_receive_message());
-        if let Event::ReceiveMessageFrom(s, d, m) = e {
+        assert!(e.inner.is_receive_message());
+        if let Event::ReceiveMessageFrom(s, d, m) = e.inner {
             assert_eq!(s, node_id);
             assert_eq!(d, inbound_id);
             // The GETDATA contains all transactions but the already known one
