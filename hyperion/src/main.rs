@@ -20,6 +20,7 @@ fn main() -> anyhow::Result<()> {
 
     let node_count = cli.reachable + cli.unreachable;
     let target_node_count = node_count as f32 * (cli.percentile_target as f32 / 100.0);
+
     let mut simulator = Simulator::new(
         cli.reachable,
         cli.unreachable,
@@ -62,6 +63,7 @@ fn main() -> anyhow::Result<()> {
 
     for _ in (0..cli.n).progress().with_style(sty) {
         // For statistical purposes
+        let mut initial_send_time = 0;
         let mut nodes_reached = 1;
         let mut percentile_time = 0;
 
@@ -83,9 +85,19 @@ fn main() -> anyhow::Result<()> {
             match event {
                 Event::ReceiveMessageFrom(src, dst, msg) => {
                     if msg.is_tx() && percentile_time == 0 {
+                        if nodes_reached == 1 {
+                            // Define initial time as the time it was sent, so remove the latency
+                            initial_send_time = current_time
+                                - simulator
+                                    .network
+                                    .get_links()
+                                    .get(&(src, dst).into())
+                                    .unwrap();
+                        }
+
                         nodes_reached += 1;
                         if nodes_reached as f32 >= target_node_count {
-                            percentile_time = current_time;
+                            percentile_time = current_time - initial_send_time;
                         }
                     }
                     for future_event in simulator
