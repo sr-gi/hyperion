@@ -1,6 +1,7 @@
-use std::collections::hash_map::{DefaultHasher, Entry};
-use std::collections::{HashMap, HashSet};
-use std::hash::Hasher;
+use hashbrown::hash_map::Entry;
+use hashbrown::DefaultHashBuilder;
+use hashbrown::{HashMap, HashSet};
+use std::hash::{BuildHasher, Hasher};
 
 use itertools::Itertools;
 use rand::rngs::StdRng;
@@ -302,7 +303,7 @@ impl Node {
         I: Iterator<Item = &'a TxId> + 'a,
     {
         iter.filter(move |txid| {
-            !self.knows_transaction(txid) && !self.requested_transactions.contains(txid)
+            !self.knows_transaction(txid) && !self.requested_transactions.contains(*txid)
         })
     }
 
@@ -322,7 +323,7 @@ impl Node {
         }
 
         // Seed our hasher using the target transaction id
-        let mut deterministic_randomizer = DefaultHasher::new();
+        let mut deterministic_randomizer = DefaultHashBuilder::default().build_hasher();
         deterministic_randomizer.write_u32(txid);
 
         // Also add out own node_id as seed. This is only necessary in the simulator given node_ids

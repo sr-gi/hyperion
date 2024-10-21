@@ -1,5 +1,5 @@
-use std::collections::hash_map::Keys;
-use std::collections::HashMap;
+use hashbrown::hash_map::Keys;
+use hashbrown::HashMap;
 use std::hash::Hash;
 
 #[derive(Clone)]
