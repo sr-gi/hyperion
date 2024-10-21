@@ -5,3 +5,7 @@ members = [
     "hyper-lib",
     "hyperion",
 ]
+
+[profile.release-with-debug]
+inherits = "release"
+debug = true
