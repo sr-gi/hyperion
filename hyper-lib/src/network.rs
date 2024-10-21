@@ -3,7 +3,7 @@ use crate::statistics::NetworkStatistics;
 use crate::txreconciliation::{ShortID, Sketch};
 use crate::{TxId, SECS_TO_NANOS};
 
-use std::collections::{HashMap, HashSet};
+use hashbrown::{HashMap, HashSet};
 
 use itertools::Itertools;
 use rand::rngs::StdRng;
