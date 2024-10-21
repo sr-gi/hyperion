@@ -310,12 +310,22 @@ impl Node {
         &self.node_statistics
     }
 
-    fn is_fanout_target(&self, txid: &TxId, peer_id: &NodeId, n: f64) -> bool {
+    fn get_fanout_targets<'a, I>(&self, txid: TxId, peers: I, n: f64) -> Vec<NodeId>
+    where
+        I: Iterator<Item = &'a NodeId>,
+    {
+        // Shortcut if we are not Erlay.
+        // In theory, we would need to return the whole vector of peers, but this won't be used for non-erlay sims,
+        // should_fanout_to would return true without checking the vector, so we can speed this up by just returning an empty vector
+        if !self.is_erlay {
+            return Vec::new();
+        }
+
         // Seed our hasher using the target transaction id
         let mut deterministic_randomizer = DefaultHasher::new();
-        deterministic_randomizer.write_u32(*txid);
+        deterministic_randomizer.write_u32(txid);
 
-        // Also add out own node_id as seed. This is only necessary in the simulator given node_is
+        // Also add out own node_id as seed. This is only necessary in the simulator given node_ids
         // are global. If we don't seed the hasher with a distinct value, two nodes sharing the same
         // neighbourhood will obtain the exact same ordering of peers here
         deterministic_randomizer.write_usize(self.node_id);
@@ -328,21 +338,13 @@ impl Node {
 
         // Shortcut to prevent useless work
         if target_size == 0 {
-            return false;
+            return Vec::new();
         }
-
-        // Inbound peers are also initiators
-        let peers = if self.is_peer_inbounds(peer_id) {
-            self.get_inbounds()
-        } else {
-            self.get_outbounds()
-        };
 
         // Sort peers deterministically at random so we can pick the ones to fanout to.
         // The order is computed using the hasher, as in whatever value results from
         // hashing (txid | node_id | peer_id)
         let mut best_peers = peers
-            .keys()
             .map(|peer_id| {
                 // Sort values based on the already seeded hasher and their node_id
                 // Clone it so each hasher is only seeded with txid | node_id
@@ -354,25 +356,19 @@ impl Node {
         best_peers.sort();
 
         let fanout_candidates = best_peers.iter().map(|(_, y)| *y).collect::<Vec<_>>();
-        fanout_candidates[0..target_size as usize].contains(peer_id)
+        fanout_candidates[0..target_size as usize].to_vec()
     }
 
     /// Whether we should fanout the given transaction to the given peer.
     /// Assume that Erlay support is a boolean flag for all nodes in the simulation
     /// for now, so there are no fanout_tx_relay peers if Erlay is supported
-    fn should_fanout_to(&self, txid: &TxId, peer_id: &NodeId) -> bool {
+    fn should_fanout_to(&self, peer_id: &NodeId, fanout_targets: &[NodeId]) -> bool {
         let peer = self.get_peer(peer_id).unwrap();
         if !peer.is_erlay() {
             return true;
         }
 
-        let n = if peer.get_tx_reconciliation_state().unwrap().is_initiator() {
-            self.get_inbounds().len() as f64 * INBOUND_FANOUT_DESTINATIONS_FRACTION
-        } else {
-            OUTBOUND_FANOUT_DESTINATIONS as f64
-        };
-
-        self.is_fanout_target(txid, peer_id, n)
+        fanout_targets.contains(peer_id)
     }
 
     /// Schedules a transaction announcement to be processed at a future time.
@@ -386,10 +382,27 @@ impl Node {
         current_time: u64,
     ) -> Vec<ScheduledEvent> {
         let mut events = Vec::new();
+        // The fanout targets can be computed just once per transaction
+        let inbound_fanout_targets = self.get_fanout_targets(
+            txid,
+            self.in_peers.keys(),
+            self.get_inbounds().len() as f64 * INBOUND_FANOUT_DESTINATIONS_FRACTION,
+        );
+        let outbound_fanout_targets = self.get_fanout_targets(
+            txid,
+            self.out_peers.keys(),
+            OUTBOUND_FANOUT_DESTINATIONS as f64,
+        );
+
+        let fanout_targets = inbound_fanout_targets
+            .into_iter()
+            .chain(outbound_fanout_targets)
+            .collect::<Vec<_>>();
+
         for peer_id in peers {
             // Do not send the transaction to peers that already know about it (e.g. the peer that sent it to us)
             if !self.get_peer(&peer_id).unwrap().knows_transaction(&txid) {
-                if self.should_fanout_to(&txid, &peer_id) {
+                if self.should_fanout_to(&peer_id, &fanout_targets) {
                     self.get_peer_mut(&peer_id)
                         .unwrap()
                         .add_tx_to_be_announced(txid);
@@ -1269,6 +1282,11 @@ mod test_node {
         // depending on whether or not the peer is selected for fanout. The decision making is performed by
         // should_fanout_to. Here, inbound and outbound peers only change the likelihood of being selected
         let txid = get_random_txid();
+        let outbound_fanout_targets = node.get_fanout_targets(
+            txid,
+            node.out_peers.keys(),
+            OUTBOUND_FANOUT_DESTINATIONS as f64,
+        );
         let events = node.schedule_tx_announcement(txid, outbound_peer_ids.clone(), current_time);
         assert_eq!(events.len(), outbound_peer_ids.len());
         for e in events {
@@ -1280,7 +1298,7 @@ mod test_node {
                 assert!(outbound_peer_ids.contains(&dst));
                 // The transaction is added to to_be_announced or to the recon_set depending on should_fanout_to
                 // This is deterministic, so we can call it again and check
-                if node.should_fanout_to(&txid, &dst) {
+                if node.should_fanout_to(&dst, &outbound_fanout_targets) {
                     assert!(node
                         .out_peers
                         .get(&dst)
