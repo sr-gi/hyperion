@@ -1,11 +1,10 @@
 use crate::node::{Node, NodeId};
 use crate::statistics::NetworkStatistics;
-use crate::txreconciliation::{ShortID, Sketch};
-use crate::{TxId, SECS_TO_NANOS};
+use crate::txreconciliation::Sketch;
+use crate::SECS_TO_NANOS;
 
-use std::collections::{HashMap, HashSet};
+use hashbrown::{HashMap, HashSet};
 
-use itertools::Itertools;
 use rand::rngs::StdRng;
 use rand_distr::{Distribution, LogNormal, Uniform};
 
@@ -53,15 +52,17 @@ impl From<(NodeId, NodeId)> for Link {
 /// Defines the collection of network messages that can be exchanged between peers
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum NetworkMessage {
-    INV(Vec<TxId>),
-    GETDATA(Vec<TxId>),
-    TX(TxId),
-    // This is a hack. REQRECON does not include a collection of short ids (that'd defuse the purpose of Erlay). However,
+    INV,
+    GETDATA,
+    TX,
+    // This is a hack. REQRECON does not include any transaction related data (that'd defuse the purpose of Erlay). However,
     // for simulation purposes we need to estimate the set difference (q). A workaround for that is letting the peer
     // know what we know so it can be always perfectly "predicted", and scale it to a chosen factor later on if we chose to
-    REQRECON(Vec<ShortID>),
+    REQRECON(bool),
     SKETCH(Sketch),
-    RECONCILDIFF(Vec<ShortID>),
+    // This is also a hack. RECONCILDIFF would usually have the difference between the two sets, but given we are simulating
+    // a single transaction, this could be simplified to a bool signaling whether that transaction was in the senders set or not
+    RECONCILDIFF(bool),
 }
 
 impl NetworkMessage {
@@ -70,51 +71,52 @@ impl NetworkMessage {
     pub fn get_size(&self) -> usize {
         // Fanout messages:
         //      To make it fair game with Erlay related messages, we will only count the amount of
-        //      data each transactions contributes to a message, so we will drop the fixed overhead
+        //      data each transaction contributes to a message, so we will drop the fixed overhead
         //      (that is, message header, input count, ...).
         //      Notice we are even counting the transaction size as zero, because each node will receive
         //      it exactly once. This means that the overhead is constant.
         // Erlay messages:
         //      For Erlay related messages, the reconciliation flow is run (and messages are exchanged)
-        //      independently of whether there are transactions to be exchanged or not (as opposite to
+        //      independently of whether there is a transaction to be exchanged or not (as opposite to
         //      the fanout flow). Being this the case, the simulator won't count the size of REQRECON
         //      messages, given they are independent of the amount of transactions being reconciled.
         //      For SKETCH messages, we will count the growth of the sketch based on the difference q,
         //      and for RECONCILDIFF we will count size of the difference.
         match self {
             // Type of entry + hash (4+32 bytes) * number of entries
-            NetworkMessage::INV(x) => 36 * x.len(),
+            NetworkMessage::INV => 36,
             // Type of entry + hash (4+32 bytes) * number of entries
-            NetworkMessage::GETDATA(x) => 36 * x.len(),
+            NetworkMessage::GETDATA => 36,
             // Each node will receive the transaction exactly once, we can count this as zero
-            NetworkMessage::TX(_) => 0,
+            NetworkMessage::TX => 0,
             // Not counting the size of periodic requests, check the previous comment for rationale
             NetworkMessage::REQRECON(_) => 0,
             // The sketch size is based on the expected difference of the sets, 4-bytes per count
             NetworkMessage::SKETCH(s) => s.get_size() * 4,
             // 1 byte signaling whether the received sketch could ber properly decoded, plus n bytes,
-            // depending on the number of missing transactions (8 bytes per count)
+            // depending on the number of missing transactions (4 bytes per count)
             // Notice `RECONCILDIFF` doesn't include the success byte, because we assume the decoding
             // always succeeds in our simulations
-            NetworkMessage::RECONCILDIFF(ask_ids) => 1 + ask_ids.len() * 4,
+            NetworkMessage::RECONCILDIFF(ask_ids) => 1 + (*ask_ids as usize) * 4,
         }
     }
 
     /// Returns whether the network message is a inventory message
     pub fn is_inv(&self) -> bool {
-        matches!(self, NetworkMessage::INV(..))
+        matches!(self, NetworkMessage::INV)
     }
 
     /// Returns whether the network message is a data request message
     pub fn is_get_data(&self) -> bool {
-        matches!(self, NetworkMessage::GETDATA(..))
+        matches!(self, NetworkMessage::GETDATA)
     }
 
     /// Returns whether the network message is transaction message
     pub fn is_tx(&self) -> bool {
-        matches!(self, NetworkMessage::TX(..))
+        matches!(self, NetworkMessage::TX)
     }
 
+    // Returns whether the network message is an Erlay message
     pub fn is_erlay(&self) -> bool {
         matches!(self, NetworkMessage::REQRECON(..))
             || matches!(self, NetworkMessage::SKETCH(..))
@@ -124,26 +126,15 @@ impl NetworkMessage {
 
 impl std::fmt::Display for NetworkMessage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let (m, txs) = match self {
-            NetworkMessage::INV(x) => ("inv", format!("txids: [{:x}]", x.iter().format(", "))),
-            NetworkMessage::GETDATA(x) => {
-                ("getdata", format!("txids: [{:x}]", x.iter().format(", ")))
-            }
-            NetworkMessage::TX(x) => ("tx", format!("txid: {:x}", x)),
-            NetworkMessage::REQRECON(x) => {
-                ("reqrecon", format!("txids: [{:x}]", x.iter().format(", ")))
-            }
-            NetworkMessage::SKETCH(s) => (
-                "sketch",
-                format!("txids: [{:x}]", s.get_tx_set().iter().format(", ")),
-            ),
-            NetworkMessage::RECONCILDIFF(x) => (
-                "reconcildiff",
-                format!("txids: [{:x}]", x.iter().format(", ")),
-            ),
+        let m = match self {
+            NetworkMessage::INV => "inv",
+            NetworkMessage::GETDATA => "getdata",
+            NetworkMessage::TX => "tx",
+            NetworkMessage::REQRECON(x) => &format!("reqrecon ({x})"),
+            NetworkMessage::SKETCH(s) => &format!("sketch ({})", s.get_tx_set()),
+            NetworkMessage::RECONCILDIFF(x) => &format!("reconcildiff ({})", x),
         };
-
-        write!(f, "{m} ({txs})")
+        write!(f, "{m}",)
     }
 }
 

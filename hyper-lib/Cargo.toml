@@ -11,6 +11,7 @@ Supporting library for hyperion: a discrete time network event simulator for Bit
 [dependencies]
 # FIXME: Move this into a feature
 graphrs = "0.9.0"
+hashbrown = "0.15"
 itertools = "0.13.0"
 log = "0.4.20"
 rand = "0.8.5"

@@ -67,9 +67,9 @@ impl NodeStatistics {
 
     fn get_data_ref(&mut self, msg: &NetworkMessage) -> (&mut Data, &mut Data) {
         let data_ref = match msg {
-            NetworkMessage::INV(_) => &mut self.inv,
-            NetworkMessage::GETDATA(_) => &mut self.get_data,
-            NetworkMessage::TX(_) => &mut self.tx,
+            NetworkMessage::INV => &mut self.inv,
+            NetworkMessage::GETDATA => &mut self.get_data,
+            NetworkMessage::TX => &mut self.tx,
             NetworkMessage::REQRECON(_) => &mut self.reqrecon,
             NetworkMessage::SKETCH(_) => &mut self.sketch,
             NetworkMessage::RECONCILDIFF(_) => &mut self.reconcildiff,
