@@ -1,8 +1,6 @@
-use std::hash::{BuildHasher, Hasher};
-
-use hashbrown::DefaultHashBuilder;
 use hashbrown::HashMap;
 use rand::rngs::StdRng;
+use rand::seq::SliceRandom;
 use rand_distr::{Distribution, Exp};
 
 use crate::indexedmap::IndexedMap;
@@ -10,7 +8,7 @@ use crate::network::NetworkMessage;
 use crate::simulator::{Event, ScheduledEvent};
 use crate::statistics::NodeStatistics;
 use crate::txreconciliation::TxReconciliationState;
-use crate::{TxId, SECS_TO_NANOS};
+use crate::SECS_TO_NANOS;
 
 pub type NodeId = usize;
 
@@ -20,8 +18,6 @@ static NONPREF_PEER_TX_DELAY: u64 = 2;
 static OUTBOUND_FANOUT_DESTINATIONS: u16 = 1;
 static INBOUND_FANOUT_DESTINATIONS_FRACTION: f64 = 0.1;
 pub static RECON_REQUEST_INTERVAL: u64 = 8;
-
-static TXID: TxId = 0x4a5e1e4b;
 
 macro_rules! debug_log {
     ($time:tt, $id:expr, $($arg:tt)*)
@@ -345,10 +341,7 @@ impl Node {
     }
 
     /// Get the collection of peers selected to fanout the simulated transaction
-    fn get_fanout_targets<'a, I>(&self, peers: I, n: f64) -> Vec<NodeId>
-    where
-        I: Iterator<Item = &'a NodeId>,
-    {
+    fn get_fanout_targets(&mut self, peers: Vec<NodeId>, n: f64) -> Vec<NodeId> {
         // Shortcut if we are not Erlay.
         // In theory, we would need to return the whole vector of peers, but this won't be used for non-erlay sims,
         // should_fanout_to would return true without checking the vector, so we can speed this up by just returning an empty vector
@@ -356,42 +349,15 @@ impl Node {
             return Vec::new();
         }
 
-        // Seed our hasher using the target transaction id
-        let mut deterministic_randomizer = DefaultHashBuilder::default().build_hasher();
-        deterministic_randomizer.write_u32(TXID);
-
-        // Also add out own node_id as seed. This is only necessary in the simulator given node_ids
-        // are global. If we don't seed the hasher with a distinct value, two nodes sharing the same
-        // neighbourhood will obtain the exact same ordering of peers here
-        deterministic_randomizer.write_usize(self.node_id);
-
-        // Round n deterministically at random (this is only really necessary for inbounds, as outbounds always
-        // provide an already rounded n)
-        let target_size = ((deterministic_randomizer.finish() & 0xFFFFFFFF)
-            + (n * 0x100000000u64 as f64) as u64)
-            >> 32;
-
-        // Shortcut to prevent useless work
-        if target_size == 0 {
-            return Vec::new();
-        }
-
-        // Sort peers deterministically at random so we can pick the ones to fanout to.
-        // The order is computed using the hasher, as in whatever value results from
-        // hashing (txid | node_id | peer_id)
-        let mut best_peers = peers
-            .map(|peer_id| {
-                // Sort values based on the already seeded hasher and their node_id
-                // Clone it so each hasher is only seeded with txid | node_id
-                let mut h = deterministic_randomizer.clone();
-                h.write_usize(*peer_id);
-                (h.finish(), *peer_id)
-            })
-            .collect::<Vec<_>>();
-        best_peers.sort();
-
-        let fanout_candidates = best_peers.iter().map(|(_, y)| *y).collect::<Vec<_>>();
-        fanout_candidates[0..target_size as usize].to_vec()
+        // In the real Bitcoin code, we perform a fancy ordering of the peers based on the transaction id that we want to send and the
+        // peer_ids in our neighbourhood to obtain a deterministically random sorting from where we can pick our fanout peers.
+        // In the simulator, we can make this way simpler, we only care about the ordering being deterministically random, and different
+        // for multiples runs of the same simulation. This can be achieved by simply randomly sorting our peers using our pre-seeded rng.
+        let target_size = n.round() as usize;
+        peers
+            .choose_multiple(&mut self.rng, target_size)
+            .copied()
+            .collect()
     }
 
     /// Whether we should fanout the given transaction to the given peer.
@@ -417,12 +383,16 @@ impl Node {
     ) -> Vec<ScheduledEvent> {
         let mut events = Vec::new();
         // The fanout targets can be computed just once per transaction
-        let inbound_fanout_targets = self.get_fanout_targets(
-            self.in_peers.keys(),
+        let mut inbound_fanout_targets = self.get_fanout_targets(
+            self.in_peers.keys().copied().collect::<Vec<_>>(),
             self.get_inbounds().len() as f64 * INBOUND_FANOUT_DESTINATIONS_FRACTION,
         );
-        let outbound_fanout_targets =
-            self.get_fanout_targets(self.out_peers.keys(), OUTBOUND_FANOUT_DESTINATIONS as f64);
+        let outbound_fanout_targets = self.get_fanout_targets(
+            self.out_peers.keys().copied().collect::<Vec<_>>(),
+            OUTBOUND_FANOUT_DESTINATIONS as f64,
+        );
+
+        inbound_fanout_targets.shuffle(&mut self.rng);
 
         for peer_id in peers {
             // Do not send the transaction to peers that already know about it (e.g. the peer that sent it to us)
@@ -1180,8 +1150,10 @@ mod test_node {
         // For Erlay peers, transactions are added to to_be_announced or to the peer reconciliation set
         // depending on whether or not the peer is selected for fanout. The decision making is performed by
         // should_fanout_to. Here, inbound and outbound peers only change the likelihood of being selected
-        let outbound_fanout_targets =
-            node.get_fanout_targets(node.out_peers.keys(), OUTBOUND_FANOUT_DESTINATIONS as f64);
+        let outbound_fanout_targets = node.get_fanout_targets(
+            node.out_peers.keys().copied().collect::<Vec<_>>(),
+            OUTBOUND_FANOUT_DESTINATIONS as f64,
+        );
         let events = node.schedule_tx_announcement(outbound_peer_ids.clone(), current_time);
         assert_eq!(events.len(), outbound_peer_ids.len());
         for e in events {
