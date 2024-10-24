@@ -28,6 +28,10 @@ where
         &self.map
     }
 
+    pub fn inner_mut(&mut self) -> &mut HashMap<K, V> {
+        &mut self.map
+    }
+
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         self.order.push(key);
         self.map.insert(key, value)
