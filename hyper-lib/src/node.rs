@@ -1,9 +1,7 @@
-use hashbrown::hash_map::Entry;
-use hashbrown::DefaultHashBuilder;
-use hashbrown::{HashMap, HashSet};
 use std::hash::{BuildHasher, Hasher};
 
-use itertools::Itertools;
+use hashbrown::DefaultHashBuilder;
+use hashbrown::HashMap;
 use rand::rngs::StdRng;
 use rand_distr::{Distribution, Exp};
 
@@ -22,6 +20,8 @@ static NONPREF_PEER_TX_DELAY: u64 = 2;
 static OUTBOUND_FANOUT_DESTINATIONS: u16 = 1;
 static INBOUND_FANOUT_DESTINATIONS_FRACTION: f64 = 0.1;
 pub static RECON_REQUEST_INTERVAL: u64 = 8;
+
+static TXID: TxId = 0x4a5e1e4b;
 
 macro_rules! debug_log {
     ($time:tt, $id:expr, $($arg:tt)*)
@@ -55,12 +55,11 @@ impl PoissonTimer {
 /// A minimal abstraction of a peer
 #[derive(Clone)]
 pub struct Peer {
-    /// Set of transactions pending to be announced. This is populated when a new announcement event
-    /// is scheduled, and consumed once the event takes place
-    to_be_announced: Vec<TxId>,
-    /// Transactions already known by this peer, this is populated either when a peer announced a transaction
-    /// to us, or when we send a transaction to them
-    known_transactions: HashSet<TxId>,
+    /// Whether the transaction is pending to be announced. This is set when a new
+    /// announcement event is scheduled, and consumed once the event takes place
+    to_be_announced: bool,
+    /// Whether the node already knows the simulated transaction
+    knows_transaction: bool,
     /// Transaction reconciliation related data for peers that support Erlay
     tx_reconciliation_state: Option<TxReconciliationState>,
 }
@@ -75,39 +74,53 @@ impl Peer {
             None
         };
         Self {
-            to_be_announced: Vec::new(),
-            known_transactions: HashSet::new(),
+            to_be_announced: false,
+            knows_transaction: false,
             tx_reconciliation_state,
         }
     }
 
-    pub fn knows_transaction(&self, txid: &TxId) -> bool {
-        self.known_transactions.contains(txid)
-    }
-
-    fn add_known_transaction(&mut self, txid: TxId) {
-        self.known_transactions.insert(txid);
+    /// Reset the peer state so a new round of the simulation can be run from a clean state
+    pub fn reset(&mut self) {
+        self.to_be_announced = false;
+        self.knows_transaction = false;
         if let Some(recon_state) = self.get_tx_reconciliation_state_mut() {
-            recon_state.remove_tx(&txid);
+            recon_state.clear(/*include_delayed=*/ true);
         }
     }
 
-    fn add_tx_to_be_announced(&mut self, txid: TxId) {
-        self.to_be_announced.push(txid)
+    pub fn knows_transaction(&self) -> bool {
+        self.knows_transaction
     }
 
-    fn drain_txs_to_be_announced(&mut self) -> Vec<TxId> {
-        self.to_be_announced.drain(..).collect()
+    fn add_known_transaction(&mut self) {
+        self.knows_transaction = true;
+        if let Some(recon_state) = self.get_tx_reconciliation_state_mut() {
+            recon_state.remove_tx();
+        }
+    }
+
+    fn add_tx_to_be_announced(&mut self) {
+        assert!(!self.knows_transaction());
+        self.to_be_announced = true;
+    }
+
+    // Clears tx_to_be_announced, returning whether an announcement was pending or not
+    fn drain_tx_to_be_announced(&mut self) -> bool {
+        let to_be_announced = self.to_be_announced;
+        self.to_be_announced = false;
+
+        to_be_announced
     }
 
     fn is_erlay(&self) -> bool {
         self.tx_reconciliation_state.is_some()
     }
 
-    fn add_tx_to_reconcile(&mut self, txid: TxId) -> bool {
+    fn add_tx_to_reconcile(&mut self) -> bool {
         self.tx_reconciliation_state
             .as_mut()
-            .map(|recon_set| recon_set.add_tx(txid))
+            .map(|recon_set| recon_set.add_tx())
             .unwrap_or(false)
     }
 
@@ -121,7 +134,7 @@ impl Peer {
 }
 
 /// A node is the main unit of the simulator. It represents an abstractions of a Bitcoin node and
-/// stores all the data required to simulate sending and receiving transactions
+/// stores all the data required to simulate sending and receiving the simulated transaction
 #[derive(Clone)]
 pub struct Node {
     /// The (global) node identifier
@@ -136,12 +149,12 @@ pub struct Node {
     in_peers: HashMap<NodeId, Peer>,
     /// Map of outbound peers identified by their (global) node identifier
     out_peers: IndexedMap<NodeId, Peer>,
-    /// Set of transactions that have already been requested (but not yet received)
-    requested_transactions: HashSet<TxId>,
-    /// Set of transactions which request has been delayed (see [Node::add_request])
-    delayed_requests: HashMap<NodeId, Vec<TxId>>,
-    /// Set of transaction already known by the node
-    known_transactions: HashSet<TxId>,
+    /// Whether the transaction has been requested (but not yet received)
+    requested_transaction: bool,
+    /// Whether a request for the simulated transaction has been delayed (see [Node::add_request])
+    delayed_request: Option<NodeId>,
+    /// Whether the transaction is already known by the node
+    known_transaction: bool,
     /// Poisson timer shared by all inbound peers. Used to decide when to announce transactions to them
     inbounds_poisson_timer: PoissonTimer,
     /// Map of poisson timers for outbound peers. Used to decide when to announce transactions to each of them
@@ -159,19 +172,32 @@ impl Node {
             is_erlay,
             in_peers: HashMap::new(),
             out_peers: IndexedMap::new(),
-            requested_transactions: HashSet::new(),
-            delayed_requests: HashMap::new(),
-            known_transactions: HashSet::new(),
+            requested_transaction: false,
+            delayed_request: None,
+            known_transaction: false,
             inbounds_poisson_timer: PoissonTimer::new(INBOUND_INVENTORY_BROADCAST_INTERVAL),
             outbounds_poisson_timers: HashMap::new(),
             node_statistics: NodeStatistics::new(),
         }
     }
 
-    pub fn reset_timers(&mut self) {
+    // Resets the node state so a new round of the simulation can be run from a clean state
+    pub fn reset(&mut self) {
         self.inbounds_poisson_timer.next_interval = 0;
         for timer in self.outbounds_poisson_timers.values_mut() {
             timer.next_interval = 0;
+        }
+
+        self.requested_transaction = false;
+        self.delayed_request = None;
+        self.known_transaction = false;
+
+        for in_peer in self.get_inbounds_mut().values_mut() {
+            in_peer.reset();
+        }
+
+        for out_peer in self.get_outbounds_mut().values_mut() {
+            out_peer.reset();
         }
     }
 
@@ -228,8 +254,16 @@ impl Node {
         &self.in_peers
     }
 
+    pub fn get_inbounds_mut(&mut self) -> &mut HashMap<NodeId, Peer> {
+        &mut self.in_peers
+    }
+
     pub fn get_outbounds(&self) -> &HashMap<NodeId, Peer> {
         self.out_peers.inner()
+    }
+
+    pub fn get_outbounds_mut(&mut self) -> &mut HashMap<NodeId, Peer> {
+        self.out_peers.inner_mut()
     }
 
     /// Check whether a given peer is an inbound connection
@@ -285,33 +319,33 @@ impl Node {
         );
     }
 
-    /// Whether we know a given transaction
-    pub fn knows_transaction(&self, txid: &TxId) -> bool {
-        self.known_transactions.contains(txid)
+    /// Whether we know the simulated transaction
+    pub fn knows_transaction(&self) -> bool {
+        self.known_transaction
     }
 
-    /// Add a given transaction to our known collection
-    fn add_known_transaction(&mut self, txid: TxId) {
-        self.known_transactions.insert(txid);
+    /// Whether the simulated transaction has already been requested to a peer
+    pub fn has_requested_transaction(&self) -> bool {
+        self.requested_transaction
     }
 
-    fn filter_known_and_requested_transactions<'a, I>(
-        &'a self,
-        iter: I,
-    ) -> impl Iterator<Item = I::Item> + 'a
-    where
-        I: Iterator<Item = &'a TxId> + 'a,
-    {
-        iter.filter(move |txid| {
-            !self.knows_transaction(txid) && !self.requested_transactions.contains(*txid)
-        })
+    /// Flag the simulated transaction as known
+    fn add_known_transaction(&mut self) {
+        assert!(!self.knows_transaction());
+        self.known_transaction = true;
+    }
+
+    /// Whether the simulated transaction is already known or has already been requested
+    fn is_transaction_known_or_requested(&self) -> bool {
+        self.knows_transaction() || self.has_requested_transaction()
     }
 
     pub fn get_statistics(&self) -> &NodeStatistics {
         &self.node_statistics
     }
 
-    fn get_fanout_targets<'a, I>(&self, txid: TxId, peers: I, n: f64) -> Vec<NodeId>
+    /// Get the collection of peers selected to fanout the simulated transaction
+    fn get_fanout_targets<'a, I>(&self, peers: I, n: f64) -> Vec<NodeId>
     where
         I: Iterator<Item = &'a NodeId>,
     {
@@ -324,7 +358,7 @@ impl Node {
 
         // Seed our hasher using the target transaction id
         let mut deterministic_randomizer = DefaultHashBuilder::default().build_hasher();
-        deterministic_randomizer.write_u32(txid);
+        deterministic_randomizer.write_u32(TXID);
 
         // Also add out own node_id as seed. This is only necessary in the simulator given node_ids
         // are global. If we don't seed the hasher with a distinct value, two nodes sharing the same
@@ -378,22 +412,17 @@ impl Node {
     /// Notice this works since a Poisson process is memoryless hence past events do not affect future ones.
     fn schedule_tx_announcement(
         &mut self,
-        txid: TxId,
         peers: Vec<NodeId>,
         current_time: u64,
     ) -> Vec<ScheduledEvent> {
         let mut events = Vec::new();
         // The fanout targets can be computed just once per transaction
         let inbound_fanout_targets = self.get_fanout_targets(
-            txid,
             self.in_peers.keys(),
             self.get_inbounds().len() as f64 * INBOUND_FANOUT_DESTINATIONS_FRACTION,
         );
-        let outbound_fanout_targets = self.get_fanout_targets(
-            txid,
-            self.out_peers.keys(),
-            OUTBOUND_FANOUT_DESTINATIONS as f64,
-        );
+        let outbound_fanout_targets =
+            self.get_fanout_targets(self.out_peers.keys(), OUTBOUND_FANOUT_DESTINATIONS as f64);
 
         let fanout_targets = inbound_fanout_targets
             .into_iter()
@@ -402,24 +431,21 @@ impl Node {
 
         for peer_id in peers {
             // Do not send the transaction to peers that already know about it (e.g. the peer that sent it to us)
-            if !self.get_peer(&peer_id).unwrap().knows_transaction(&txid) {
+            if !self.get_peer(&peer_id).unwrap().knows_transaction() {
                 if self.should_fanout_to(&peer_id, &fanout_targets) {
                     self.get_peer_mut(&peer_id)
                         .unwrap()
-                        .add_tx_to_be_announced(txid);
+                        .add_tx_to_be_announced();
                 } else {
                     // If this peer have been picked for set reconciliation, we can assume the tx_reconciliation_state is set
                     debug_log!(
                         current_time,
                         self.node_id,
-                        "Added tx (txids: [{:x}]) to reconciliation set for peer (peer_id: {peer_id})", txid
+                        "Added tx to reconciliation set for peer (peer_id: {peer_id})"
                     );
                     assert!(
-                        self.get_peer_mut(&peer_id)
-                            .unwrap()
-                            .add_tx_to_reconcile(txid),
-                        "Couldn't add tx (txids: [{:x}]) to reconset (peer_id: {peer_id})",
-                        txid
+                        self.get_peer_mut(&peer_id).unwrap().add_tx_to_reconcile(),
+                        "Couldn't add tx to reconset (peer_id: {peer_id})",
                     );
                 }
             }
@@ -442,23 +468,21 @@ impl Node {
         events
     }
 
-    /// Kickstarts the broadcasting logic for a given transaction to all the node's peers. This includes both fanout and transaction
+    /// Kickstarts the broadcasting logic for the simulated transaction to all the node's peers. This includes both fanout and transaction
     /// reconciliation. For peers selected for fanout, an announcement is scheduled based on the peers type.
     /// Inbound peers use a shared Poisson timer with expected value of [INBOUND_INVENTORY_BROADCAST_INTERVAL] seconds,
     /// while outbound have a unique one with expected value of [OUTBOUND_INVENTORY_BROADCAST_INTERVAL] seconds.
     /// For peers selected for set reconciliation, this transaction is added to their reconciliation sets and will be made available
     /// when the next announcement is processed (this does not generate an event)
     /// Returns a collection of the scheduled events
-    pub fn broadcast_tx(&mut self, txid: TxId, current_time: u64) -> Vec<ScheduledEvent> {
-        self.add_known_transaction(txid);
+    pub fn broadcast_tx(&mut self, current_time: u64) -> Vec<ScheduledEvent> {
+        self.add_known_transaction();
 
         let mut events = self.schedule_tx_announcement(
-            txid,
             self.out_peers.keys().cloned().collect::<Vec<_>>(),
             current_time,
         );
         events.extend(self.schedule_tx_announcement(
-            txid,
             self.in_peers.keys().cloned().collect::<Vec<_>>(),
             current_time,
         ));
@@ -467,7 +491,8 @@ impl Node {
     }
 
     /// Reconciliation requests, as opposed to INVs, are sent on a schedule, no matter if we have transactions to reconcile or not
-    /// (since our peer may have and we are unaware of this). Schedule the next reconciliation request.
+    /// (since our peer may have and we are unaware of this).
+    /// Schedule the next reconciliation request.
     pub fn schedule_set_reconciliation(&mut self, request_time: u64) -> ScheduledEvent {
         // Make it so we reconcile with all peers every RECON_REQUEST_INTERVAL
         let delta = ((RECON_REQUEST_INTERVAL as f64 / self.out_peers.len() as f64)
@@ -479,7 +504,7 @@ impl Node {
         )
     }
 
-    /// Processes a previously scheduled reconciliation request. This starts the set reconciliation dance
+    /// Processes a previously scheduled reconciliation request. This starts the set reconciliation message exchange
     pub fn process_scheduled_reconciliation(
         &mut self,
         request_time: u64,
@@ -495,10 +520,7 @@ impl Node {
         let to_be_reconciled = next_peer
             .get_tx_reconciliation_state()
             .unwrap()
-            .get_recon_set()
-            .iter()
-            .copied()
-            .collect_vec();
+            .get_recon_set();
 
         // Return two events, one starting the reconciliation flow for the given peer, and another one
         // scheduling the next reconciliation request (for the next peer in line)
@@ -513,7 +535,7 @@ impl Node {
         )
     }
 
-    /// Processes a previously scheduled transaction announcement to a given peer, returning an event (and the time at which it should be processed) if successful
+    /// Processes a previously scheduled transaction announcement to a given peer, returning an event to be scheduled if successful
     pub fn process_scheduled_announcement(
         &mut self,
         peer_id: NodeId,
@@ -529,42 +551,26 @@ impl Node {
                 .make_delayed_available();
         }
 
-        // We assume all transactions pending to be announced fit in a single INV message. This is a simplification.
-        // However, an INV message fits up to 50000 entries, so it should be enough for out simulation purposes.
-        // https://github.com/bitcoin/bitcoin/blob/20ccb30b7af1c30cece2b0579ba88aa101583f07/src/net_processing.cpp#L87-L88
-        let to_be_announced = peer
-            .drain_txs_to_be_announced()
-            .into_iter()
-            // Filter all transactions that the peer already knows (because they have announced them to us already)
-            .filter(|txid| !peer.knows_transaction(txid))
-            .collect::<Vec<TxId>>();
-
-        if to_be_announced.is_empty() {
-            None
+        // Drop the announcement if the peer has already learnt about the transaction during our delay
+        // We are made aware of this by receiving an INV from the peer
+        if peer.drain_tx_to_be_announced() && !peer.knows_transaction() {
+            // We are simulating a single transaction, so that always fits within a single INV
+            self.send_message_to(NetworkMessage::INV, peer_id, current_time)
         } else {
-            self.send_message_to(NetworkMessage::INV(to_be_announced), peer_id, current_time)
+            None
         }
     }
 
-    /// Adds the request of a set of transactions to a given node to our trackers. If the node is inbounds, this will generate
-    /// a delayed request, and return an event to be processed later in time. If the node is outbounds, the request will be generated
-    /// straightaway. No request will be generated if we already know all provided transactions
-    fn add_request(
-        &mut self,
-        txids: Vec<TxId>,
-        peer_id: NodeId,
-        request_time: u64,
-    ) -> Option<ScheduledEvent> {
-        let to_be_requested = self
-            .filter_known_and_requested_transactions(txids.iter())
-            .copied()
-            .collect::<Vec<_>>();
-        if to_be_requested.is_empty() {
+    /// Records the request of the simulated transaction in or tracker (assigned to a given peer). If the peer is inbounds, this will generate
+    /// a delayed request, and return an event to be processed at a future time. If the node is outbounds, the request will be generated
+    /// straightaway.
+    /// No request will be generated if we already know the transaction
+    fn add_request(&mut self, peer_id: NodeId, request_time: u64) -> Option<ScheduledEvent> {
+        if self.is_transaction_known_or_requested() {
             debug_log!(
                 request_time,
                 self.node_id,
-                "Already known transactions (txids: [{:x}]), not requesting them to peer_id: {peer_id}",
-                txids.iter().format(", ")
+                "Transactions is already known, or has already been requested, not requesting it to peer_id: {peer_id}",
             );
             return None;
         }
@@ -574,47 +580,38 @@ impl Node {
         // and an inbound peer request is in delayed stage, the inbounds will be dropped and
         // the outbound will be processed
         if self.is_peer_inbounds(&peer_id) {
-            debug_log!(
-                request_time,
-                self.node_id,
-                "Delaying getdata for transactions (txids: [{:x}]) to peer {peer_id}",
-                to_be_requested.iter().format(", ")
-            );
-            for txid in to_be_requested.iter() {
-                match self.delayed_requests.entry(peer_id) {
-                    Entry::Occupied(mut e) => {
-                        e.get_mut().push(*txid);
-                    }
-                    Entry::Vacant(e) => {
-                        e.insert(vec![*txid]);
-                    }
-                };
-            }
-            Some(ScheduledEvent::new(
-                Event::process_delayed_request(self.node_id, peer_id),
-                request_time + NONPREF_PEER_TX_DELAY * SECS_TO_NANOS,
-            ))
-        } else {
-            debug_log!(
-                request_time,
-                self.node_id,
-                "Sending getdata for transactions (txids: [{:x}]) to peer {peer_id}",
-                to_be_requested.iter().format(", ")
-            );
-            self.requested_transactions.extend(to_be_requested.iter());
-            Some(ScheduledEvent::new(
-                Event::receive_message_from(
+            if self.delayed_request.is_none() {
+                debug_log!(
+                    request_time,
                     self.node_id,
-                    peer_id,
-                    NetworkMessage::GETDATA(to_be_requested),
-                ),
+                    "Delaying getdata to peer {peer_id}",
+                );
+
+                self.delayed_request = Some(peer_id);
+
+                Some(ScheduledEvent::new(
+                    Event::process_delayed_request(self.node_id, peer_id),
+                    request_time + NONPREF_PEER_TX_DELAY * SECS_TO_NANOS,
+                ))
+            } else {
+                debug_log!(
+                    request_time,
+                    self.node_id,
+                    "There's already a pending delayed getdata request to peer {peer_id}, skipping",
+                );
+                None
+            }
+        } else {
+            self.requested_transaction = true;
+            Some(ScheduledEvent::new(
+                Event::receive_message_from(self.node_id, peer_id, NetworkMessage::GETDATA),
                 request_time,
             ))
         }
     }
 
-    /// Processes a delayed request for a given inbound peer. If any transaction is still pending to be requested, the delayed request
-    /// will be processed and an event will be generated. If all transactions have been already requested to outbound peers
+    /// Processes a delayed request for a given inbound peer. If the transaction is still pending to be requested, the delayed request
+    /// will be processed and an event will be generated. If the transactions have been already requested to outbound peers
     /// during our delay, the request will simply be dropped.
     /// Notice that we do not queue requests (because the nodes is the simulator are well behaved)
     pub fn process_delayed_request(
@@ -622,25 +619,21 @@ impl Node {
         peer_id: NodeId,
         request_time: u64,
     ) -> Option<ScheduledEvent> {
-        let pending = self.delayed_requests.remove(&peer_id).unwrap_or_else(|| {
-            panic!("Trying to process an non-existing delayed request for peer_id: {peer_id}")
-        });
-        let to_be_requested = self
-            .filter_known_and_requested_transactions(pending.iter())
-            .copied()
-            .collect::<Vec<_>>();
-        if to_be_requested.is_empty() {
+        // If we are processing a delayed request we must have set it in the past
+        assert!(self.delayed_request == Some(peer_id));
+        self.delayed_request = None;
+
+        if self.is_transaction_known_or_requested() {
             debug_log!(
                 request_time,
                 self.node_id,
-                "A non-delayed request for transactions (txids: [{:x}]), has already been processed. Not requesting them to peer_id: {peer_id}",
-                pending.iter().format(", ")
+                "A non-delayed request for the transaction has already been processed. Not requesting them to peer_id: {peer_id}",
             );
             return None;
         }
 
-        self.requested_transactions.extend(to_be_requested.iter());
-        let msg = NetworkMessage::GETDATA(to_be_requested);
+        self.requested_transaction = true;
+        let msg = NetworkMessage::GETDATA;
         self.node_statistics.add_sent(&msg, true);
 
         Some(ScheduledEvent::new(
@@ -671,47 +664,42 @@ impl Node {
 
         if let Some(peer) = self.get_peer(&peer_id) {
             match msg {
-                NetworkMessage::INV(ref txids) => {
-                    assert!(!txids.is_empty(), "Trying to send out an empty transaction announcement to a peer (peer_id: {peer_id})");
-                    for txid in txids.iter() {
-                        assert!(self.knows_transaction(txid), "Trying to announce a transaction we should't know about (txid: {txid:x}) to a peer (peer_id: {peer_id})");
-                        assert!(!peer.knows_transaction(txid), "Trying to announce a transaction (txid: {txid:x}) to a peer that already knows about it (peer_id: {peer_id})");
-                    }
+                NetworkMessage::INV => {
+                    assert!(self.knows_transaction(), "Trying to announce the transaction to a peer (peer_id: {peer_id}), but we should't know about");
+                    assert!(!peer.knows_transaction(), "Trying to announce a transaction to a peer that already knows about it (peer_id: {peer_id})");
 
                     message = Some(ScheduledEvent::new(
                         Event::receive_message_from(self.node_id, peer_id, msg),
                         request_time,
                     ));
                 }
-                NetworkMessage::GETDATA(txids) => {
-                    assert!(!txids.is_empty(), "Trying to send out an empty transaction request to a peer (peer_id: {peer_id})");
-                    for txid in txids.iter() {
-                        assert!(!self.knows_transaction(txid), "Trying to request a transaction we already know about (txid: {txid:x}) from a peer (peer_id: {peer_id})");
-                        assert!(peer.knows_transaction(txid), "Trying to request a transaction (txid: {txid:x}) from a peer that shouldn't know about it (peer_id: {peer_id})");
-                    }
+                NetworkMessage::GETDATA => {
+                    assert!(
+                        !self.knows_transaction(),
+                        "Trying to request the transaction from a peer (peer_id: {peer_id}), but we already know about it"
+                    );
+                    assert!(peer.knows_transaction(), "Trying to request a transaction from a peer that shouldn't know about it (peer_id: {peer_id})");
 
-                    message = self.add_request(txids, peer_id, request_time);
+                    message = self.add_request(peer_id, request_time);
                 }
-                NetworkMessage::TX(txid) => {
-                    assert!(self.knows_transaction(&txid), "Trying to send a transaction we should't know about (txid: {txid:x}) to a peer (peer_id: {peer_id})");
-                    assert!(!peer.knows_transaction(&txid), "Trying to send a transaction (txid: {txid:x}) to a peer that already should know about it (peer_id: {peer_id})");
-                    self.get_peer_mut(&peer_id)
-                        .unwrap()
-                        .add_known_transaction(txid);
+                NetworkMessage::TX => {
+                    assert!(self.knows_transaction(), "Trying to send the transaction to a peer (peer_id: {peer_id}), but we shouldn't know about it");
+                    assert!(!peer.knows_transaction(), "Trying to send a transaction to a peer that already should know about it (peer_id: {peer_id})");
+                    self.get_peer_mut(&peer_id).unwrap().add_known_transaction();
 
                     message = Some(ScheduledEvent::new(
                         Event::receive_message_from(self.node_id, peer_id, msg),
                         request_time,
                     ));
                 }
-                NetworkMessage::REQRECON(ref txids) => {
+                NetworkMessage::REQRECON(has_tx) => {
                     assert!(self.is_erlay, "Trying to send a reconciliation request to peer (peer_id: {peer_id}) but we do not support Erlay");
-                    assert!(self.get_peer(&peer_id).unwrap().is_erlay(), "Trying to send a reconciliation request to peer (peer_id: {peer_id}) but they do not support Erlay");
-                    for txid in txids.iter() {
-                        assert!(self.knows_transaction(txid), "Trying to reconcile a transaction we should't know about (txid: {txid:x}) with a peer (peer_id: {peer_id})");
+                    assert!(self.get_peer(&peer_id).unwrap().is_erlay(), "Trying to send a reconciliation request to peer (peer_id: {peer_id}), but they do not support Erlay");
+                    if has_tx {
+                        assert!(self.knows_transaction(), "Trying to reconcile a transaction with a peer (peer_id: {peer_id}), but we should't know about");
                         // If we know that the peer knows, we have received at least an announcement from the peer (if not the transaction itself) meaning that the transaction shouldn't be
                         // in this peer's reconciliation set
-                        assert!(!peer.knows_transaction(txid), "Trying to reconcile a transaction (txid: {txid:x}) with a peer that already knows about it (peer_id: {peer_id})");
+                        assert!(!peer.knows_transaction(), "Trying to reconcile a transaction with a peer that already knows about it (peer_id: {peer_id})");
                     }
                     assert!(!peer.get_tx_reconciliation_state().unwrap().is_reconciling(), "Trying to send a reconciliation request to a peer we are already reconciling with (peer_id: {peer_id})");
                     self.get_peer_mut(&peer_id)
@@ -724,31 +712,31 @@ impl Node {
                         request_time,
                     ))
                 }
-                NetworkMessage::SKETCH(ref sketch) => {
+                NetworkMessage::SKETCH(sketch) => {
                     assert!(self.is_erlay, "Trying to send a reconciliation sketch to peer (peer_id: {peer_id}) but we do not support Erlay");
-                    assert!(self.get_peer(&peer_id).unwrap().is_erlay(), "Trying to send a reconciliation sketch to peer (peer_id: {peer_id}) but they do not support Erlay");
+                    assert!(self.get_peer(&peer_id).unwrap().is_erlay(), "Trying to send a reconciliation sketch to peer (peer_id: {peer_id}), but they do not support Erlay");
                     assert!(peer.get_tx_reconciliation_state().unwrap().is_reconciling(), "Trying to send a reconciliation sketch to a peer that hasn't requested so (peer_id: {peer_id})");
                     // This check is a bit of a hack, but in the simulator short_ids and txids match
-                    for txid in sketch.get_tx_set() {
-                        assert!(self.knows_transaction(txid), "Trying to send a sketch containing transaction (txid: {txid:x}) to a peer (peer_id: {peer_id}) but we should't know about it");
+                    if sketch.get_tx_set() {
+                        assert!(self.knows_transaction(), "Trying to send a sketch containing a transaction to a peer (peer_id: {peer_id}) but we should't know about it");
                     }
                     message = Some(ScheduledEvent::new(
                         Event::receive_message_from(self.node_id, peer_id, msg),
                         request_time,
                     ))
                 }
-                NetworkMessage::RECONCILDIFF(ref diff) => {
+                NetworkMessage::RECONCILDIFF(wants_tx) => {
                     assert!(self.is_erlay, "Trying to send a reconciliation difference to peer (peer_id: {peer_id}) but we do not support Erlay");
-                    assert!(self.get_peer(&peer_id).unwrap().is_erlay(), "Trying to send a reconciliation difference to peer (peer_id: {peer_id}) but they do not support Erlay");
+                    assert!(self.get_peer(&peer_id).unwrap().is_erlay(), "Trying to send a reconciliation difference to peer (peer_id: {peer_id}), but they do not support Erlay");
                     assert!(peer.get_tx_reconciliation_state().unwrap().is_reconciling(), "Trying to send a reconciliation difference to a peer that hasn't requested so (peer_id: {peer_id})");
-                    for txid in diff.iter() {
-                        assert!(!self.knows_transaction(txid), "Trying to request a transaction we should know about (txid: {txid:x}) from a peer (peer_id: {peer_id})");
+                    if wants_tx {
+                        assert!(!self.knows_transaction(), "Trying to request a transaction from a peer (peer_id: {peer_id}), but we should already know about");
                     }
                     self.get_peer_mut(&peer_id)
                         .unwrap()
                         .get_tx_reconciliation_state_mut()
                         .unwrap()
-                        .clear();
+                        .clear(/*include_delayed=*/ false);
                     message = Some(ScheduledEvent::new(
                         Event::receive_message_from(self.node_id, peer_id, msg),
                         request_time,
@@ -813,54 +801,31 @@ impl Node {
         // Maybe we can work around this by passing a reference to the peer instead of the node id
         // and getting another reference down the line
         match msg {
-            NetworkMessage::INV(txids) => {
-                assert!(
-                    !txids.is_empty(),
-                    "Received an empty transaction announcement from peer (peer_id: {peer_id})"
-                );
-                let mut to_be_requested = Vec::new();
-                for txid in txids.into_iter() {
-                    self.get_peer_mut(&peer_id)
-                        .unwrap()
-                        .add_known_transaction(txid);
-                    // We only request transactions that we don't know about
-                    if !self.knows_transaction(&txid) {
-                        to_be_requested.push(txid)
-                    } else {
-                        debug_log!(
-                            request_time,
-                            self.node_id,
-                            "Already known transaction (txid: {txid:x})"
-                        );
-                    }
-                }
-                if !to_be_requested.is_empty() {
-                    self.send_message_to(
-                        NetworkMessage::GETDATA(to_be_requested),
-                        peer_id,
-                        request_time,
-                    )
-                    .map_or(Vec::new(), |x| vec![x])
-                } else {
-                    // If all entries have been filtered out there is no point calling [self::send_message_to]
+            NetworkMessage::INV => {
+                self.get_peer_mut(&peer_id).unwrap().add_known_transaction();
+                // We only request transactions that we don't know about
+                if self.knows_transaction() {
+                    debug_log!(request_time, self.node_id, "Already known transaction");
                     Vec::new()
+                } else {
+                    self.send_message_to(NetworkMessage::GETDATA, peer_id, request_time)
+                        .map_or(Vec::new(), |x| vec![x])
                 }
             }
-            NetworkMessage::GETDATA(txids) => {
-                txids.iter().map(|txid| {
-                        assert!(self.knows_transaction(txid), "Received transaction request for a transaction we don't know of (txid: {txid:x}) from a peer (peer_id: {peer_id})");
-                        assert!(!self.get_peer(&peer_id).unwrap().knows_transaction(txid), "Received a transaction request (txid: {txid:x}) from a peer that should already know about it (peer_id {peer_id})");
-                        // Send tx cannot return None
-                        self.send_message_to(NetworkMessage::TX(*txid), peer_id, request_time).unwrap()
-                    }).collect::<Vec<_>>()
+            NetworkMessage::GETDATA => {
+                assert!(self.knows_transaction(), "Received transaction request from a peer (peer_id: {peer_id}), but we don't know about the transaction");
+                assert!(!self.get_peer(&peer_id).unwrap().knows_transaction(), "Received a transaction request from a peer that should already know about it (peer_id {peer_id})");
+                // Send tx cannot return None
+                self.send_message_to(NetworkMessage::TX, peer_id, request_time)
+                    .map_or(Vec::new(), |x| vec![x])
             }
-            NetworkMessage::TX(txid) => {
-                assert!(!self.knows_transaction(&txid), "Received a transaction we already know of (txid: {txid:x}) from a peer (peer_id: {peer_id})");
-                assert!(self.get_peer(&peer_id).unwrap().knows_transaction(&txid), "Received a transaction (txid: {txid:x}) from a node that shouldn't know about it (peer_id {peer_id})");
-                self.requested_transactions.remove(&txid);
-                self.broadcast_tx(txid, request_time)
+            NetworkMessage::TX => {
+                assert!(!self.knows_transaction(), "Received the transaction from a peer (peer_id: {peer_id}), but we already knew about it");
+                assert!(self.get_peer(&peer_id).unwrap().knows_transaction(), "Received a transaction from a node that shouldn't know about it (peer_id {peer_id})");
+                self.requested_transaction = true;
+                self.broadcast_tx(request_time)
             }
-            NetworkMessage::REQRECON(txids) => {
+            NetworkMessage::REQRECON(has_tx) => {
                 assert!(self.is_erlay, "Received a reconciliation request from peer (peer_id: {peer_id}) but we do not support Erlay");
                 assert!(self.get_peer(&peer_id).unwrap().is_erlay(), "Received a reconciliation request from peer (peer_id: {peer_id}) but they do not support Erlay");
                 let peer = self.get_peer_mut(&peer_id).unwrap();
@@ -869,82 +834,83 @@ impl Node {
                     .unwrap()
                     .set_reconciling();
                 let sketch = peer
-                    .get_tx_reconciliation_state_mut()
+                    .get_tx_reconciliation_state()
                     .unwrap()
-                    .compute_sketch(txids);
+                    .compute_sketch(has_tx);
 
                 self.send_message_to(NetworkMessage::SKETCH(sketch), peer_id, request_time)
                     .map_or(Vec::new(), |x| vec![x])
             }
-            NetworkMessage::SKETCH(their_sketch) => {
+            NetworkMessage::SKETCH(sketch) => {
                 let peer = self.get_peer(&peer_id).unwrap();
                 assert!(self.is_erlay, "Received a reconciliation sketch from peer (peer_id: {peer_id}) but we do not support Erlay");
                 assert!(peer.is_erlay(), "Received a reconciliation sketch from peer (peer_id: {peer_id}) but they do not support Erlay");
                 assert!(peer.get_tx_reconciliation_state().unwrap().is_reconciling(), "Received a reconciliation sketch from a peer that we haven't requested to reconcile with (peer_id: {peer_id})");
 
-                // Compute the local difference between the sets (what we are missing) and send a RECONCLDIFF message to the peer containing them
-                let (local_diff, mut remote_diff) = peer
-                    .get_tx_reconciliation_state()
-                    .unwrap()
-                    .compute_sketch_diff(their_sketch);
+                // Compute the local difference and remote difference between the sets (what we are missing and they are missing respectively)
+                let peer_recon_state = peer.get_tx_reconciliation_state().unwrap();
+                let (mut local_diff, remote_diff) = peer_recon_state.compute_sketch_diff(sketch);
 
-                let (local_diff, already_known) = local_diff
-                    .into_iter()
-                    .partition(|x| !self.knows_transaction(x));
-                remote_diff = remote_diff
-                    .iter()
-                    .filter(|x: &&u32| !peer.knows_transaction(x))
-                    .copied()
-                    .collect::<Vec<_>>();
-
-                // Flag the peer as knowing all the transaction that we both know. Transaction from any of the other two
-                // sets (local_diff and remote_diff) will be flagged either when we send them the transactions or when they
+                // Flag the peer as knowing the transaction  if we both know it. Any other of the two partial knowing cases
+                // (local_diff or remote_diff set, but not both) will be flagged either when we send them the transactions or when they
                 // send them to us
-                for txid in already_known {
-                    self.get_peer_mut(&peer_id)
-                        .unwrap()
-                        .add_known_transaction(txid);
+                if !remote_diff && peer_recon_state.get_recon_set() {
+                    self.get_peer_mut(&peer_id).unwrap().add_known_transaction();
                 }
 
-                // Send a RECONCILDIFF with our difference, and an INV with theirs (if any)
-                let mut events = self
+                // If we know the transaction but it is not in their recon set,  we picked this node for fanout.
+                // Flag peer as knowing and do not request it via set reconciliation
+                if local_diff && self.knows_transaction() {
+                    local_diff = false;
+                    self.get_peer_mut(&peer_id).unwrap().add_known_transaction();
+                }
+
+                // Send a RECONCILDIFF signaling whether we want the transaction or not, and an INV corresponding to the transaction if they are missing it
+                let mut events: Vec<ScheduledEvent> = self
                     .send_message_to(
                         NetworkMessage::RECONCILDIFF(local_diff),
                         peer_id,
                         request_time,
                     )
                     .map_or(Vec::new(), |x| vec![x]);
-                if !remote_diff.is_empty() {
+
+                // If they are missing the transaction, send it via INV
+                if remote_diff {
+                    assert!(!local_diff);
                     events.push(
-                        self.send_message_to(
-                            NetworkMessage::INV(remote_diff),
-                            peer_id,
-                            request_time,
-                        )
-                        .unwrap(),
+                        self.send_message_to(NetworkMessage::INV, peer_id, request_time)
+                            .unwrap(),
                     )
                 }
 
                 events
             }
-            NetworkMessage::RECONCILDIFF(diff) => {
+            NetworkMessage::RECONCILDIFF(wants_tx) => {
                 let peer = self.get_peer(&peer_id).unwrap();
+                let recon_state = peer.get_tx_reconciliation_state().unwrap();
                 assert!(self.is_erlay, "Received a reconciliation difference from peer (peer_id: {peer_id}) but we do not support Erlay");
                 assert!(peer.is_erlay(), "Received a reconciliation difference from peer (peer_id: {peer_id}) but they do not support Erlay");
                 assert!(peer.get_tx_reconciliation_state().unwrap().is_reconciling(), "Received a reconciliation difference from a peer that we haven't requested to reconcile with (peer_id: {peer_id})");
-                for txid in diff.iter() {
-                    assert!(self.knows_transaction(txid), "Received a reconciliation difference from peer (peer_id: {peer_id}) containing a transaction we don't know (txid: {txid:x})");
-                    assert!(!peer.knows_transaction(txid), "Received a reconciliation difference from peer (peer_id: {peer_id}) containing a transaction they already know (txid: {txid:x})");
+                if wants_tx {
+                    assert!(self.knows_transaction(), "Received a reconciliation difference from peer (peer_id: {peer_id}) containing a transaction we don't know about");
+                    assert!(!peer.knows_transaction(), "Received a reconciliation difference from peer (peer_id: {peer_id}) containing a transaction they already know");
                 }
 
-                let peer_mut = self.get_peer_mut(&peer_id).unwrap();
-                let recon_set = peer_mut.get_tx_reconciliation_state_mut().unwrap().clear();
-                for txid in recon_set.into_iter().filter(|txid| !diff.contains(txid)) {
-                    peer_mut.add_known_transaction(txid)
+                // If they don't want the transaction, and we have the it in their set, they already know it
+                if !wants_tx && recon_state.get_recon_set() {
+                    let peer_mut = self.get_peer_mut(&peer_id).unwrap();
+                    peer_mut.add_known_transaction()
                 }
 
-                if !diff.is_empty() {
-                    self.send_message_to(NetworkMessage::INV(diff), peer_id, request_time)
+                self.get_peer_mut(&peer_id)
+                    .unwrap()
+                    .get_tx_reconciliation_state_mut()
+                    .unwrap()
+                    .clear(/*include_delayed=*/ false);
+
+                // Send them the transaction if they want it
+                if wants_tx {
+                    self.send_message_to(NetworkMessage::INV, peer_id, request_time)
                         .map_or(Vec::new(), |x| vec![x])
                 } else {
                     Vec::new()
@@ -957,7 +923,6 @@ impl Node {
 #[cfg(test)]
 mod test_peer {
     use super::*;
-    use crate::test::get_random_txid;
 
     #[test]
     fn test_new() {
@@ -991,94 +956,87 @@ mod test_peer {
     #[test]
     fn test_add_known_tx() {
         let mut fanout_peer = Peer::new(/*is_erlay=*/ false, /*is_inbound=*/ false);
-        let txid = get_random_txid();
-        fanout_peer.add_known_transaction(txid);
-        assert!(fanout_peer.knows_transaction(&txid));
-        assert!(!fanout_peer.knows_transaction(&get_random_txid()));
+        fanout_peer.add_known_transaction();
+        assert!(fanout_peer.knows_transaction());
 
         let mut erlay_peer = Peer::new(/*is_erlay=*/ true, /*is_inbound=*/ false);
-        let txid = get_random_txid();
-        erlay_peer.add_known_transaction(txid);
-        assert!(erlay_peer.knows_transaction(&txid));
-        assert!(!erlay_peer.knows_transaction(&get_random_txid()));
+        erlay_peer.add_known_transaction();
+        assert!(erlay_peer.knows_transaction());
 
-        // If an erlay peer has some transaction on their pending to be reconciled (either delayed or on the set)
-        // and we add them to known, they will be removed from reconciliation
-        let recon_tx = get_random_txid();
-        let delayed_tx = get_random_txid();
-        erlay_peer.add_tx_to_reconcile(recon_tx);
+        // If an erlay peer has a transaction on their pending to be reconciled (either delayed or on the set)
+        // and we add it to known, it will be removed from reconciliation
+        erlay_peer.reset();
+        erlay_peer.add_tx_to_reconcile();
+
+        // The transaction is in its corresponding structures before flagging it as known
+        assert!(!erlay_peer
+            .get_tx_reconciliation_state()
+            .unwrap()
+            .get_recon_set());
+        assert!(erlay_peer
+            .get_tx_reconciliation_state()
+            .unwrap()
+            .get_delayed_set());
+
         erlay_peer
             .get_tx_reconciliation_state_mut()
             .unwrap()
             .make_delayed_available();
-        erlay_peer.add_tx_to_reconcile(delayed_tx);
 
-        // The transactions are in their corresponding structures before flagging them as known
         assert!(erlay_peer
             .get_tx_reconciliation_state()
             .unwrap()
-            .get_recon_set()
-            .contains(&recon_tx));
-        assert!(erlay_peer
+            .get_recon_set());
+        assert!(!erlay_peer
             .get_tx_reconciliation_state()
             .unwrap()
-            .get_delayed_set()
-            .contains(&delayed_tx));
+            .get_delayed_set());
 
-        // And are removed after
-        erlay_peer.add_known_transaction(recon_tx);
+        // And is removed after
+        erlay_peer.add_known_transaction();
         assert!(!erlay_peer
             .get_tx_reconciliation_state()
             .unwrap()
-            .get_recon_set()
-            .contains(&recon_tx));
-        erlay_peer.add_known_transaction(delayed_tx);
+            .get_recon_set());
+
         assert!(!erlay_peer
             .get_tx_reconciliation_state()
             .unwrap()
-            .get_recon_set()
-            .contains(&delayed_tx));
-        assert!(erlay_peer.knows_transaction(&recon_tx));
-        assert!(erlay_peer.knows_transaction(&delayed_tx));
+            .get_recon_set());
+        assert!(erlay_peer.knows_transaction());
     }
 
     #[test]
     fn test_drain_txs_to_be_announced() {
         let mut peer = Peer::new(/*is_erlay=*/ false, /*is_inbound=*/ false);
-        let mut txs = Vec::new();
 
-        for _ in 0..10 {
-            let txid = get_random_txid();
-            peer.add_tx_to_be_announced(txid);
-            txs.push(txid);
-        }
-        assert!(peer.to_be_announced.len() == txs.len());
-        let drained_txs = peer.drain_txs_to_be_announced();
-        assert_eq!(txs, drained_txs);
-        assert!(peer.to_be_announced.is_empty());
+        // Drain return false if there is no transaction in the set
+        assert!(!peer.drain_tx_to_be_announced());
+
+        // And true if there is, but then removes it
+        peer.add_tx_to_be_announced();
+        assert!(peer.drain_tx_to_be_announced());
+        assert!(!peer.to_be_announced);
     }
 
     #[test]
     fn test_add_tx_to_reconcile() {
         // Fanout peers have no reconciliation state, so data cannot be added to it
         let mut fanout_peer = Peer::new(/*is_erlay=*/ false, /*is_inbound=*/ false);
-        assert!(!fanout_peer.add_tx_to_reconcile(get_random_txid()));
+        assert!(!fanout_peer.add_tx_to_reconcile());
 
         // Erlay peers do have reconciliation state, independently of whether they are initiators or not. Data added
         // to the set is put on the delayed collection first, and moved to the actual set on demand
         let mut erlay_peer = Peer::new(/*is_erlay=*/ true, /*is_inbound=*/ false);
-        let txid = get_random_txid();
-        assert!(erlay_peer.add_tx_to_reconcile(txid));
+        assert!(erlay_peer.add_tx_to_reconcile());
         assert!(erlay_peer
             .get_tx_reconciliation_state()
             .unwrap()
-            .get_delayed_set()
-            .contains(&txid));
+            .get_delayed_set());
         assert!(!erlay_peer
             .get_tx_reconciliation_state()
             .unwrap()
-            .get_recon_set()
-            .contains(&txid));
+            .get_recon_set());
 
         // Make transactions available for reconciliation. This usually happens on the next trickle interval for the peer
         erlay_peer
@@ -1089,19 +1047,16 @@ mod test_peer {
         assert!(!erlay_peer
             .get_tx_reconciliation_state()
             .unwrap()
-            .get_delayed_set()
-            .contains(&txid));
+            .get_delayed_set());
         assert!(erlay_peer
             .get_tx_reconciliation_state()
             .unwrap()
-            .get_recon_set()
-            .contains(&txid));
+            .get_recon_set());
     }
 }
 
 #[cfg(test)]
 mod test_node {
-    use crate::test::get_random_txid;
 
     use super::*;
     use rand::SeedableRng;
@@ -1183,58 +1138,6 @@ mod test_node {
     }
 
     #[test]
-    fn test_filter_known_and_requested_transactions() {
-        let rng = StdRng::seed_from_u64(0);
-        let node_id = 0;
-        let mut node = Node::new(node_id, rng, true, true);
-        let mut known_txs = Vec::new();
-        let mut unknown_txs = Vec::new();
-        let mut requested_txs = Vec::new();
-
-        for _ in 0..10 {
-            let known = get_random_txid();
-            let requested = get_random_txid();
-            node.add_known_transaction(known);
-            known_txs.push(known);
-            node.requested_transactions.insert(requested);
-            requested_txs.push(requested);
-            unknown_txs.push(get_random_txid())
-        }
-
-        assert_eq!(
-            node.filter_known_and_requested_transactions(known_txs.iter())
-                .count(),
-            0
-        );
-        assert_eq!(
-            node.filter_known_and_requested_transactions(requested_txs.iter())
-                .count(),
-            0
-        );
-        assert_eq!(
-            node.filter_known_and_requested_transactions(unknown_txs.iter())
-                .copied()
-                .collect::<Vec<_>>(),
-            unknown_txs
-        );
-        assert_eq!(
-            node.filter_known_and_requested_transactions(
-                [known_txs.clone(), requested_txs].concat().iter()
-            )
-            .count(),
-            0
-        );
-        assert_eq!(
-            node.filter_known_and_requested_transactions(
-                [known_txs, unknown_txs.clone()].concat().iter()
-            )
-            .copied()
-            .collect::<Vec<_>>(),
-            unknown_txs
-        );
-    }
-
-    #[test]
     fn test_schedule_tx_announcement_no_erlay() {
         let rng = StdRng::seed_from_u64(0);
         let node_id = 0;
@@ -1247,20 +1150,14 @@ mod test_node {
 
         // For non-erlay peers, schedule_tx_announcement creates an event for each peer
         // This is completely independent of whether the peer is inbound or outbound
-        let txid = get_random_txid();
-        let events = node.schedule_tx_announcement(txid, outbound_peer_ids.clone(), 0);
+        let events = node.schedule_tx_announcement(outbound_peer_ids.clone(), 0);
         assert_eq!(events.len(), outbound_peer_ids.len());
         for e in events {
             assert!(matches!(e.inner, Event::ProcessScheduledAnnouncement(..)));
             if let Event::ProcessScheduledAnnouncement(src, dst) = e.inner {
                 assert_eq!(src, node_id);
                 assert!(outbound_peer_ids.contains(&dst));
-                assert!(node
-                    .out_peers
-                    .get(&dst)
-                    .unwrap()
-                    .to_be_announced
-                    .contains(&txid))
+                assert!(node.out_peers.get(&dst).unwrap().to_be_announced)
             };
         }
     }
@@ -1282,13 +1179,9 @@ mod test_node {
         // For Erlay peers, transactions are added to to_be_announced or to the peer reconciliation set
         // depending on whether or not the peer is selected for fanout. The decision making is performed by
         // should_fanout_to. Here, inbound and outbound peers only change the likelihood of being selected
-        let txid = get_random_txid();
-        let outbound_fanout_targets = node.get_fanout_targets(
-            txid,
-            node.out_peers.keys(),
-            OUTBOUND_FANOUT_DESTINATIONS as f64,
-        );
-        let events = node.schedule_tx_announcement(txid, outbound_peer_ids.clone(), current_time);
+        let outbound_fanout_targets =
+            node.get_fanout_targets(node.out_peers.keys(), OUTBOUND_FANOUT_DESTINATIONS as f64);
+        let events = node.schedule_tx_announcement(outbound_peer_ids.clone(), current_time);
         assert_eq!(events.len(), outbound_peer_ids.len());
         for e in events {
             assert!(matches!(e.inner, Event::ProcessScheduledAnnouncement(..)));
@@ -1300,12 +1193,7 @@ mod test_node {
                 // The transaction is added to to_be_announced or to the recon_set depending on should_fanout_to
                 // This is deterministic, so we can call it again and check
                 if node.should_fanout_to(&dst, &outbound_fanout_targets) {
-                    assert!(node
-                        .out_peers
-                        .get(&dst)
-                        .unwrap()
-                        .to_be_announced
-                        .contains(&txid));
+                    assert!(node.out_peers.get(&dst).unwrap().to_be_announced);
                     fanout_count += 1;
                 } else {
                     assert!(node
@@ -1314,8 +1202,7 @@ mod test_node {
                         .unwrap()
                         .get_tx_reconciliation_state()
                         .unwrap()
-                        .get_delayed_set()
-                        .contains(&txid));
+                        .get_delayed_set());
                     reconciliation_count += 1;
                 }
             };
@@ -1343,9 +1230,8 @@ mod test_node {
             node.accept_connection(*peer_id, true);
         }
 
-        let txid = get_random_txid();
-        let events = node.broadcast_tx(txid, 0);
-        assert!(node.knows_transaction(&txid));
+        let events = node.broadcast_tx(0);
+        assert!(node.knows_transaction());
 
         for e in events {
             // Events are all in the future
@@ -1392,40 +1278,37 @@ mod test_node {
         let node_id = 0;
         let mut node = Node::new(node_id, rng, true, true);
         let outbound_peer_ids = Vec::from_iter(1..11);
-        let mut to_be_reconciled = HashMap::new();
         let current_time = 0;
+
+        node.add_known_transaction();
 
         for peer_id in outbound_peer_ids.iter() {
             node.connect(*peer_id, true);
 
             // Add a transaction to the reconciliation set of the peer (skip delayed)
-            let short_id = get_random_txid();
-            to_be_reconciled.insert(peer_id, vec![short_id]);
-            node.add_known_transaction(short_id);
-
             let recon_set_mut = node
                 .get_peer_mut(peer_id)
                 .unwrap()
                 .get_tx_reconciliation_state_mut()
                 .unwrap();
-            recon_set_mut.add_tx(short_id);
+            recon_set_mut.add_tx();
             recon_set_mut.make_delayed_available();
         }
 
         // Iterating over again to process the reconciliations because we want peers
         // to be connected already
-        for peer_id in outbound_peer_ids.iter() {
+        for _ in outbound_peer_ids.iter() {
             let (req_recon, scheduled_recon) = node.process_scheduled_reconciliation(current_time);
 
             // Check that we receive the two events we are expecting, and that reconciliation request (former event)
-            // contains the corresponding short id for each peer
+            // contains the transaction
             assert!(matches!(req_recon.inner, Event::ReceiveMessageFrom(..)));
             assert!(matches!(
                 req_recon.inner.get_message().unwrap(),
                 NetworkMessage::REQRECON(..)
             ));
-            if let NetworkMessage::REQRECON(ids) = req_recon.inner.get_message().unwrap() {
-                assert_eq!(ids, to_be_reconciled.get(peer_id).unwrap());
+            if let NetworkMessage::REQRECON(has_tx) = req_recon.inner.get_message().unwrap() {
+                assert!(has_tx);
             }
             assert!(matches!(
                 scheduled_recon.inner,
@@ -1448,74 +1331,67 @@ mod test_node {
         let current_time = 0;
 
         // We won't need more than one peer to test this
-        let peer_id = 1;
-        node.connect(peer_id, true);
+        let peer_id_fanout = 1;
+        let peer_id_recon = 2;
+        node.connect(peer_id_fanout, true);
+        node.connect(peer_id_recon, true);
 
         // Processing a scheduled announcement with no data to be sent returns nothing
         assert!(node
-            .process_scheduled_announcement(peer_id, current_time)
+            .process_scheduled_announcement(peer_id_fanout, current_time)
             .is_none());
 
         // If the peer has data pending to be sent, an INV message containing such data will be returned.
         // Also, if the peer had some data to be reconciled, that data will be made available (moved out of the delayed set)
-        let mut to_be_announced = Vec::new();
-        let mut to_be_reconciled = HashSet::new();
-        for _ in 1..5 {
-            let txid_to_announce = get_random_txid();
-            to_be_announced.push(txid_to_announce);
-            let txid_to_reconcile = get_random_txid();
-            to_be_reconciled.insert(txid_to_reconcile);
 
-            // Add some transactions to be announced and reconciled to the peer state
-            node.add_known_transaction(txid_to_announce);
-            node.add_known_transaction(txid_to_reconcile);
-            let peer_mut = node.get_peer_mut(&peer_id).unwrap();
-            peer_mut.add_tx_to_be_announced(txid_to_announce);
-            peer_mut.add_tx_to_reconcile(txid_to_reconcile);
-        }
+        // Add the transaction as to be announced for one, and reconciled for the other
+        node.add_known_transaction();
+        node.get_peer_mut(&peer_id_fanout)
+            .unwrap()
+            .add_tx_to_be_announced();
+        node.get_peer_mut(&peer_id_recon)
+            .unwrap()
+            .add_tx_to_reconcile();
 
-        // All transactions to be reconciled are delayed
-        assert!(node
-            .get_peer(&peer_id)
+        // The transaction to be reconciled is delayed
+        assert!(!node
+            .get_peer(&peer_id_recon)
             .unwrap()
             .get_tx_reconciliation_state()
             .unwrap()
-            .get_recon_set()
-            .is_empty());
-        assert_eq!(
-            node.get_peer(&peer_id)
-                .unwrap()
-                .get_tx_reconciliation_state()
-                .unwrap()
-                .get_delayed_set(),
-            &to_be_reconciled
-        );
+            .get_recon_set());
+        assert!(node
+            .get_peer(&peer_id_recon)
+            .unwrap()
+            .get_tx_reconciliation_state()
+            .unwrap()
+            .get_delayed_set(),);
 
-        // The inv event returned matches the transactions pending to be announced
+        // Professing the scheduled announcement returns an INV (meaning that the transaction is known and processed)
         let inv_event = node
-            .process_scheduled_announcement(peer_id, current_time)
+            .process_scheduled_announcement(peer_id_fanout, current_time)
             .unwrap();
         assert!(matches!(inv_event.inner, Event::ReceiveMessageFrom(..)));
-        if let NetworkMessage::INV(ids) = inv_event.inner.get_message().unwrap() {
-            assert_eq!(ids, &to_be_announced);
-        }
+        assert!(inv_event.inner.get_message().unwrap().is_inv());
 
-        // Transactions to be reconciled have been made available
+        // Processing the scheduled announcement for the erlay peer moves the transaction to available
+        // No INV is returned in this case
         assert!(node
-            .get_peer(&peer_id)
+            .process_scheduled_announcement(peer_id_recon, current_time)
+            .is_none());
+
+        assert!(!node
+            .get_peer(&peer_id_recon)
             .unwrap()
             .get_tx_reconciliation_state()
             .unwrap()
-            .get_delayed_set()
-            .is_empty());
-        assert_eq!(
-            node.get_peer(&peer_id)
-                .unwrap()
-                .get_tx_reconciliation_state()
-                .unwrap()
-                .get_recon_set(),
-            &to_be_reconciled
-        );
+            .get_delayed_set());
+        assert!(node
+            .get_peer(&peer_id_recon)
+            .unwrap()
+            .get_tx_reconciliation_state()
+            .unwrap()
+            .get_recon_set());
     }
 
     #[test]
@@ -1525,59 +1401,37 @@ mod test_node {
         let mut node = Node::new(node_id, rng, true, true);
         let current_time = 0;
 
-        // Calling add_request with an empty collection of transactions to be requested returns None
-        // No matter what peer this is called for
-        assert!(node.add_request(Vec::new(), 0, current_time).is_none());
-
         // Add one outbound and one inbound peer
         let outbound_id = 1;
         let inbound_id = 2;
         node.connect(outbound_id, true);
         node.accept_connection(inbound_id, true);
 
-        // All transactions we are unaware of will be requested (all of them in this case) to outbound peers
-        let txs = (0..5).map(|_| get_random_txid()).collect::<Vec<_>>();
-        let e = node
-            .add_request(txs.clone(), outbound_id, current_time)
-            .unwrap();
+        // Adding a request for a transaction we don't know will generate a get data message
+        let e = node.add_request(outbound_id, current_time).unwrap();
         assert_eq!(e.time(), current_time);
         assert!(e.inner.is_receive_message());
         if let Event::ReceiveMessageFrom(s, d, m) = e.inner {
             assert_eq!(s, node_id);
             assert_eq!(d, outbound_id);
-            assert_eq!(m, NetworkMessage::GETDATA(txs.clone()))
-        }
-        for txid in txs.iter() {
-            assert!(node.requested_transactions.contains(txid));
+            assert!(m.is_get_data())
         }
 
-        // If we try to add something we have requested already (the previous set of transactions for instance)
-        // We won't generate a new GETDATA event
-        assert!(node
-            .add_request(txs.clone(), outbound_id, current_time)
-            .is_none());
+        assert!(node.has_requested_transaction());
+
+        // Trying to add a request twice won't generate a get data again
+        assert!(node.add_request(outbound_id, current_time).is_none());
         // This holds even if we try to request it to another peer
-        assert!(node
-            .add_request(txs.clone(), inbound_id, current_time)
-            .is_none());
-        // The same applies for transactions we already know
-        let known_tx = get_random_txid();
-        node.add_known_transaction(known_tx);
-        assert!(node
-            .add_request(Vec::from([known_tx]), outbound_id, current_time)
-            .is_none());
+        assert!(node.add_request(inbound_id, current_time).is_none());
 
         // If the peer is inbound instead of outbounds, the request is delayed instead of processed straightaway
-        let txs = (0..5).map(|_| get_random_txid()).collect::<Vec<_>>();
-        assert!(!node.delayed_requests.contains_key(&inbound_id));
-        let e = node
-            .add_request(txs.clone(), inbound_id, current_time)
-            .unwrap();
+        node.requested_transaction = false; // We need to reset this manually since the transaction can only be requested once
+        assert!(node.delayed_request.is_none());
+        let e = node.add_request(inbound_id, current_time).unwrap();
         assert_eq!(e.inner, Event::ProcessDelayedRequest(node_id, inbound_id));
         assert!(e.time() > current_time);
-        // Transactions are kept in the delayed_requests collection for future processing
-        assert!(node.delayed_requests.contains_key(&inbound_id));
-        assert_eq!(node.delayed_requests.get(&inbound_id).unwrap(), &txs);
+        // The transaction is kept in the delayed_requests collection for future processing
+        assert!(node.delayed_request.is_some());
     }
 
     #[test]
@@ -1589,57 +1443,29 @@ mod test_node {
 
         let inbound_id = 1;
         node.accept_connection(inbound_id, true);
+
         // Add a delayed request
-        let txs = (0..5).map(|_| get_random_txid()).collect::<Vec<_>>();
-        node.add_request(txs.clone(), inbound_id, current_time);
-        assert!(node.delayed_requests.contains_key(&inbound_id));
+        node.add_request(inbound_id, current_time);
+        assert!(node.delayed_request.is_some());
         // Process the delayed request
         let e = node
             .process_delayed_request(inbound_id, current_time)
             .unwrap();
-        assert!(!node.delayed_requests.contains_key(&inbound_id));
+        assert!(node.delayed_request.is_none());
         assert!(e.inner.is_receive_message());
         if let Event::ReceiveMessageFrom(s, d, m) = e.inner {
             assert_eq!(s, node_id);
             assert_eq!(d, inbound_id);
-            assert_eq!(m, NetworkMessage::GETDATA(txs.clone()))
+            assert!(m.is_get_data());
         }
-        for txid in txs.iter() {
-            assert!(node.requested_transactions.contains(txid));
-        }
+        assert!(node.has_requested_transaction());
 
-        // If some of the transactions are already known (because a non-delayed request containing them was already processed)
-        // those won't be part of the GETDATA message
-        let txs = (0..5).map(|_| get_random_txid()).collect::<Vec<_>>();
-        // Add all of them
-        node.add_request(txs.clone(), inbound_id, current_time);
-        // Flag one as already known
-        node.add_known_transaction(*txs.first().unwrap());
-        // Process
-        let e = node
-            .process_delayed_request(inbound_id, current_time)
-            .unwrap();
-        assert!(!node.delayed_requests.contains_key(&inbound_id));
-        assert!(e.inner.is_receive_message());
-        if let Event::ReceiveMessageFrom(s, d, m) = e.inner {
-            assert_eq!(s, node_id);
-            assert_eq!(d, inbound_id);
-            // The GETDATA contains all transactions but the already known one
-            assert_eq!(m, NetworkMessage::GETDATA(Vec::from(&txs[1..])))
-        }
-
-        // If all transactions are known when processing the request, the method returns None
-        let txs = Vec::from([get_random_txid()]);
-        node.add_request(txs.clone(), inbound_id, current_time);
-        node.add_request(txs.clone(), inbound_id, current_time);
-        // Flag one as already known
-        node.add_known_transaction(*txs.first().unwrap());
-        assert!(node
-            .process_delayed_request(inbound_id, current_time)
-            .is_none());
+        // If the transaction is already known (because a non-delayed request containing it was already processed)
+        // there won't be any event
+        assert!(node.add_request(inbound_id, current_time).is_none());
     }
 
     // [Node::send_message_to] and [Node::receive_message_from] are self tested.
-    // They include asserts for every sent/received message  that would make the
+    // They include asserts for every sent/received message that would make the
     // message flow fail on runtime if anything was wrong
 }

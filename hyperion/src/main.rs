@@ -72,7 +72,7 @@ fn main() -> anyhow::Result<()> {
         for e in simulator
             .get_node_mut(source_node_id)
             .unwrap()
-            .broadcast_tx(txid, start_time)
+            .broadcast_tx(start_time)
         {
             simulator.add_event(e);
         }
@@ -125,13 +125,13 @@ fn main() -> anyhow::Result<()> {
                     // This allow us to finish the simulation, for Erlay scenarios, by consuming
                     // all messages in the queue
                     let node = simulator.network.get_node(src).unwrap();
-                    if !node.knows_transaction(&txid)
+                    if !node.knows_transaction()
                         || !node.get_outbounds().keys().all(|node_id| {
                             simulator
                                 .network
                                 .get_node(*node_id)
                                 .unwrap()
-                                .knows_transaction(&txid)
+                                .knows_transaction()
                         })
                     {
                         // Processing an scheduled reconciliation will return the reconciliation flow
@@ -150,7 +150,7 @@ fn main() -> anyhow::Result<()> {
 
         // Make sure every node has received the transaction
         for node in simulator.network.get_nodes() {
-            assert!(node.knows_transaction(&txid));
+            assert!(node.knows_transaction());
         }
 
         // Pick a new txid for the next iteration (if any)
@@ -167,7 +167,7 @@ fn main() -> anyhow::Result<()> {
         overall_time += percentile_time;
 
         for node in simulator.network.get_nodes_mut() {
-            node.reset_timers();
+            node.reset();
         }
     }
 
