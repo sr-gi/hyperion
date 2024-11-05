@@ -618,16 +618,6 @@ impl Node {
         peer_id: NodeId,
         request_time: u64,
     ) -> Option<ScheduledEvent> {
-        if msg.is_erlay() {
-            assert!(
-                self.is_erlay,
-                "Trying to send an Erlay message to a peer (node_id: {peer_id}), but we do not support Erlay"
-            );
-            assert!(
-                self.get_peer(&peer_id).unwrap().is_erlay(),
-                "Trying to send an Erlay message to a peer (node_id: {peer_id}), but the it hasn't signaled Erlay support"
-            );
-        }
         let message: Option<ScheduledEvent>;
 
         if let Some(peer) = self.get_peer(&peer_id) {
@@ -662,7 +652,7 @@ impl Node {
                 }
                 NetworkMessage::REQRECON(has_tx) => {
                     assert!(self.is_erlay, "Trying to send a reconciliation request to peer (peer_id: {peer_id}) but we do not support Erlay");
-                    assert!(self.get_peer(&peer_id).unwrap().is_erlay(), "Trying to send a reconciliation request to peer (peer_id: {peer_id}), but they do not support Erlay");
+                    assert!(peer.is_erlay(), "Trying to send a reconciliation request to peer (peer_id: {peer_id}), but they do not support Erlay");
                     if has_tx {
                         assert!(self.knows_transaction(), "Trying to reconcile a transaction with a peer (peer_id: {peer_id}), but we should't know about");
                         // If we know that the peer knows, we have received at least an announcement from the peer (if not the transaction itself) meaning that the transaction shouldn't be
@@ -682,7 +672,7 @@ impl Node {
                 }
                 NetworkMessage::SKETCH(sketch) => {
                     assert!(self.is_erlay, "Trying to send a reconciliation sketch to peer (peer_id: {peer_id}) but we do not support Erlay");
-                    assert!(self.get_peer(&peer_id).unwrap().is_erlay(), "Trying to send a reconciliation sketch to peer (peer_id: {peer_id}), but they do not support Erlay");
+                    assert!(peer.is_erlay(), "Trying to send a reconciliation sketch to peer (peer_id: {peer_id}), but they do not support Erlay");
                     assert!(peer.get_tx_reconciliation_state().unwrap().is_reconciling(), "Trying to send a reconciliation sketch to a peer that hasn't requested so (peer_id: {peer_id})");
                     // This check is a bit of a hack, but in the simulator short_ids and txids match
                     if sketch.get_tx_set() {
@@ -695,7 +685,7 @@ impl Node {
                 }
                 NetworkMessage::RECONCILDIFF(wants_tx) => {
                     assert!(self.is_erlay, "Trying to send a reconciliation difference to peer (peer_id: {peer_id}) but we do not support Erlay");
-                    assert!(self.get_peer(&peer_id).unwrap().is_erlay(), "Trying to send a reconciliation difference to peer (peer_id: {peer_id}), but they do not support Erlay");
+                    assert!(peer.is_erlay(), "Trying to send a reconciliation difference to peer (peer_id: {peer_id}), but they do not support Erlay");
                     assert!(peer.get_tx_reconciliation_state().unwrap().is_reconciling(), "Trying to send a reconciliation difference to a peer that hasn't requested so (peer_id: {peer_id})");
                     if wants_tx {
                         assert!(!self.knows_transaction(), "Trying to request a transaction from a peer (peer_id: {peer_id}), but we should already know about");
@@ -742,149 +732,146 @@ impl Node {
         peer_id: NodeId,
         request_time: u64,
     ) -> Vec<ScheduledEvent> {
-        assert!(
-            self.get_peer(&peer_id).is_some(),
-            "Received an message from a node we are not connected to (node_id: {peer_id})"
-        );
-        if msg.is_erlay() {
-            assert!(
-                self.is_erlay,
-                "Received an Erlay message from a peer (node_id: {peer_id}), but we do not support Erlay"
-            );
-            assert!(
-                self.get_peer(&peer_id).unwrap().is_erlay(),
-                "Received an Erlay message from a peer (node_id: {peer_id}), but the it hasn't signaled Erlay support"
-            );
-        }
+        let message: Vec<ScheduledEvent>;
+
         debug_log!(
             request_time,
             self.node_id,
             "Received {msg} from peer {peer_id}"
         );
 
-        self.node_statistics
-            .add_received(&msg, self.is_peer_inbounds(&peer_id));
-
         // We cannot hold a reference of peer here since we call mutable methods in the same context.
         // Maybe we can work around this by passing a reference to the peer instead of the node id
         // and getting another reference down the line
-        match msg {
-            NetworkMessage::INV => {
-                self.get_peer_mut(&peer_id).unwrap().add_known_transaction();
-                // We only request transactions that we don't know about
-                if self.knows_transaction() {
-                    debug_log!(request_time, self.node_id, "Already known transaction");
-                    Vec::new()
-                } else {
-                    self.send_message_to(NetworkMessage::GETDATA, peer_id, request_time)
+        if let Some(peer) = self.get_peer(&peer_id) {
+            match msg {
+                NetworkMessage::INV => {
+                    self.get_peer_mut(&peer_id).unwrap().add_known_transaction();
+                    // We only request transactions that we don't know about
+                    if self.knows_transaction() {
+                        debug_log!(request_time, self.node_id, "Already known transaction");
+                        message = Vec::new()
+                    } else {
+                        message = self
+                            .send_message_to(NetworkMessage::GETDATA, peer_id, request_time)
+                            .map_or(Vec::new(), |x| vec![x])
+                    }
+                }
+                NetworkMessage::GETDATA => {
+                    assert!(self.knows_transaction(), "Received transaction request from a peer (peer_id: {peer_id}), but we don't know about the transaction");
+                    assert!(!peer.knows_transaction(), "Received a transaction request from a peer that should already know about it (peer_id {peer_id})");
+                    // Send tx cannot return None
+                    message = self
+                        .send_message_to(NetworkMessage::TX, peer_id, request_time)
                         .map_or(Vec::new(), |x| vec![x])
                 }
-            }
-            NetworkMessage::GETDATA => {
-                assert!(self.knows_transaction(), "Received transaction request from a peer (peer_id: {peer_id}), but we don't know about the transaction");
-                assert!(!self.get_peer(&peer_id).unwrap().knows_transaction(), "Received a transaction request from a peer that should already know about it (peer_id {peer_id})");
-                // Send tx cannot return None
-                self.send_message_to(NetworkMessage::TX, peer_id, request_time)
-                    .map_or(Vec::new(), |x| vec![x])
-            }
-            NetworkMessage::TX => {
-                assert!(!self.knows_transaction(), "Received the transaction from a peer (peer_id: {peer_id}), but we already knew about it");
-                assert!(self.get_peer(&peer_id).unwrap().knows_transaction(), "Received a transaction from a node that shouldn't know about it (peer_id {peer_id})");
-                self.requested_transaction = true;
-                self.broadcast_tx(request_time)
-            }
-            NetworkMessage::REQRECON(has_tx) => {
-                assert!(self.is_erlay, "Received a reconciliation request from peer (peer_id: {peer_id}) but we do not support Erlay");
-                assert!(self.get_peer(&peer_id).unwrap().is_erlay(), "Received a reconciliation request from peer (peer_id: {peer_id}) but they do not support Erlay");
-                let peer = self.get_peer_mut(&peer_id).unwrap();
-                assert!(!peer.get_tx_reconciliation_state().unwrap().is_reconciling(), "Received a reconciliation request from a peer we are already reconciling with (peer_id: {peer_id})");
-                peer.get_tx_reconciliation_state_mut()
-                    .unwrap()
-                    .set_reconciling();
-                let sketch = peer
-                    .get_tx_reconciliation_state()
-                    .unwrap()
-                    .compute_sketch(has_tx);
-
-                self.send_message_to(NetworkMessage::SKETCH(sketch), peer_id, request_time)
-                    .map_or(Vec::new(), |x| vec![x])
-            }
-            NetworkMessage::SKETCH(sketch) => {
-                let peer = self.get_peer(&peer_id).unwrap();
-                assert!(self.is_erlay, "Received a reconciliation sketch from peer (peer_id: {peer_id}) but we do not support Erlay");
-                assert!(peer.is_erlay(), "Received a reconciliation sketch from peer (peer_id: {peer_id}) but they do not support Erlay");
-                assert!(peer.get_tx_reconciliation_state().unwrap().is_reconciling(), "Received a reconciliation sketch from a peer that we haven't requested to reconcile with (peer_id: {peer_id})");
-
-                // Compute the local difference and remote difference between the sets (what we are missing and they are missing respectively)
-                let peer_recon_state = peer.get_tx_reconciliation_state().unwrap();
-                let (mut local_diff, remote_diff) = peer_recon_state.compute_sketch_diff(sketch);
-
-                // Flag the peer as knowing the transaction  if we both know it. Any other of the two partial knowing cases
-                // (local_diff or remote_diff set, but not both) will be flagged either when we send them the transactions or when they
-                // send them to us
-                if !remote_diff && peer_recon_state.get_recon_set() {
-                    self.get_peer_mut(&peer_id).unwrap().add_known_transaction();
+                NetworkMessage::TX => {
+                    assert!(!self.knows_transaction(), "Received the transaction from a peer (peer_id: {peer_id}), but we already knew about it");
+                    assert!(peer.knows_transaction(), "Received a transaction from a node that shouldn't know about it (peer_id {peer_id})");
+                    self.requested_transaction = true;
+                    message = self.broadcast_tx(request_time)
                 }
+                NetworkMessage::REQRECON(has_tx) => {
+                    assert!(self.is_erlay, "Received a reconciliation request from peer (peer_id: {peer_id}) but we do not support Erlay");
+                    assert!(peer.is_erlay(), "Received a reconciliation request from peer (peer_id: {peer_id}) but they do not support Erlay");
+                    let peer = self.get_peer_mut(&peer_id).unwrap();
+                    assert!(!peer.get_tx_reconciliation_state().unwrap().is_reconciling(), "Received a reconciliation request from a peer we are already reconciling with (peer_id: {peer_id})");
+                    peer.get_tx_reconciliation_state_mut()
+                        .unwrap()
+                        .set_reconciling();
+                    let sketch = peer
+                        .get_tx_reconciliation_state()
+                        .unwrap()
+                        .compute_sketch(has_tx);
 
-                // If we know the transaction but it is not in their recon set,  we picked this node for fanout.
-                // Flag peer as knowing and do not request it via set reconciliation
-                if local_diff && self.knows_transaction() {
-                    local_diff = false;
-                    self.get_peer_mut(&peer_id).unwrap().add_known_transaction();
-                }
-
-                // Send a RECONCILDIFF signaling whether we want the transaction or not, and an INV corresponding to the transaction if they are missing it
-                let mut events: Vec<ScheduledEvent> = self
-                    .send_message_to(
-                        NetworkMessage::RECONCILDIFF(local_diff),
-                        peer_id,
-                        request_time,
-                    )
-                    .map_or(Vec::new(), |x| vec![x]);
-
-                // If they are missing the transaction, send it via INV
-                if remote_diff {
-                    assert!(!local_diff);
-                    events.push(
-                        self.send_message_to(NetworkMessage::INV, peer_id, request_time)
-                            .unwrap(),
-                    )
-                }
-
-                events
-            }
-            NetworkMessage::RECONCILDIFF(wants_tx) => {
-                let peer = self.get_peer(&peer_id).unwrap();
-                let recon_state = peer.get_tx_reconciliation_state().unwrap();
-                assert!(self.is_erlay, "Received a reconciliation difference from peer (peer_id: {peer_id}) but we do not support Erlay");
-                assert!(peer.is_erlay(), "Received a reconciliation difference from peer (peer_id: {peer_id}) but they do not support Erlay");
-                assert!(peer.get_tx_reconciliation_state().unwrap().is_reconciling(), "Received a reconciliation difference from a peer that we haven't requested to reconcile with (peer_id: {peer_id})");
-                if wants_tx {
-                    assert!(self.knows_transaction(), "Received a reconciliation difference from peer (peer_id: {peer_id}) containing a transaction we don't know about");
-                    assert!(!peer.knows_transaction(), "Received a reconciliation difference from peer (peer_id: {peer_id}) containing a transaction they already know");
-                }
-
-                // If they don't want the transaction, and we have the it in their set, they already know it
-                if !wants_tx && recon_state.get_recon_set() {
-                    let peer_mut = self.get_peer_mut(&peer_id).unwrap();
-                    peer_mut.add_known_transaction()
-                }
-
-                self.get_peer_mut(&peer_id)
-                    .unwrap()
-                    .get_tx_reconciliation_state_mut()
-                    .unwrap()
-                    .clear(/*include_delayed=*/ false);
-
-                // Send them the transaction if they want it
-                if wants_tx {
-                    self.send_message_to(NetworkMessage::INV, peer_id, request_time)
+                    message = self
+                        .send_message_to(NetworkMessage::SKETCH(sketch), peer_id, request_time)
                         .map_or(Vec::new(), |x| vec![x])
-                } else {
-                    Vec::new()
+                }
+                NetworkMessage::SKETCH(sketch) => {
+                    assert!(self.is_erlay, "Received a reconciliation sketch from peer (peer_id: {peer_id}) but we do not support Erlay");
+                    assert!(peer.is_erlay(), "Received a reconciliation sketch from peer (peer_id: {peer_id}) but they do not support Erlay");
+                    assert!(peer.get_tx_reconciliation_state().unwrap().is_reconciling(), "Received a reconciliation sketch from a peer that we haven't requested to reconcile with (peer_id: {peer_id})");
+
+                    // Compute the local difference and remote difference between the sets (what we are missing and they are missing respectively)
+                    let peer_recon_state = peer.get_tx_reconciliation_state().unwrap();
+                    let (mut local_diff, remote_diff) =
+                        peer_recon_state.compute_sketch_diff(sketch);
+
+                    // Flag the peer as knowing the transaction  if we both know it. Any other of the two partial knowing cases
+                    // (local_diff or remote_diff set, but not both) will be flagged either when we send them the transactions or when they
+                    // send them to us
+                    if !remote_diff && peer_recon_state.get_recon_set() {
+                        self.get_peer_mut(&peer_id).unwrap().add_known_transaction();
+                    }
+
+                    // If we know the transaction but it is not in their recon set,  we picked this node for fanout.
+                    // Flag peer as knowing and do not request it via set reconciliation
+                    if local_diff && self.knows_transaction() {
+                        local_diff = false;
+                        self.get_peer_mut(&peer_id).unwrap().add_known_transaction();
+                    }
+
+                    // Send a RECONCILDIFF signaling whether we want the transaction or not, and an INV corresponding to the transaction if they are missing it
+                    let mut events: Vec<ScheduledEvent> = self
+                        .send_message_to(
+                            NetworkMessage::RECONCILDIFF(local_diff),
+                            peer_id,
+                            request_time,
+                        )
+                        .map_or(Vec::new(), |x| vec![x]);
+
+                    // If they are missing the transaction, send it via INV
+                    if remote_diff {
+                        assert!(!local_diff);
+                        events.push(
+                            self.send_message_to(NetworkMessage::INV, peer_id, request_time)
+                                .unwrap(),
+                        )
+                    }
+
+                    message = events
+                }
+                NetworkMessage::RECONCILDIFF(wants_tx) => {
+                    let recon_state = peer.get_tx_reconciliation_state().unwrap();
+                    assert!(self.is_erlay, "Received a reconciliation difference from peer (peer_id: {peer_id}) but we do not support Erlay");
+                    assert!(peer.is_erlay(), "Received a reconciliation difference from peer (peer_id: {peer_id}) but they do not support Erlay");
+                    assert!(peer.get_tx_reconciliation_state().unwrap().is_reconciling(), "Received a reconciliation difference from a peer that we haven't requested to reconcile with (peer_id: {peer_id})");
+                    if wants_tx {
+                        assert!(self.knows_transaction(), "Received a reconciliation difference from peer (peer_id: {peer_id}) containing a transaction we don't know about");
+                        assert!(!peer.knows_transaction(), "Received a reconciliation difference from peer (peer_id: {peer_id}) containing a transaction they already know");
+                    }
+
+                    // If they don't want the transaction, and we have the it in their set, they already know it
+                    if !wants_tx && recon_state.get_recon_set() {
+                        let peer_mut = self.get_peer_mut(&peer_id).unwrap();
+                        peer_mut.add_known_transaction()
+                    }
+
+                    self.get_peer_mut(&peer_id)
+                        .unwrap()
+                        .get_tx_reconciliation_state_mut()
+                        .unwrap()
+                        .clear(/*include_delayed=*/ false);
+
+                    // Send them the transaction if they want it
+                    if wants_tx {
+                        message = self
+                            .send_message_to(NetworkMessage::INV, peer_id, request_time)
+                            .map_or(Vec::new(), |x| vec![x]);
+                    } else {
+                        message = Vec::new();
+                    }
                 }
             }
+        } else {
+            panic!("Received an message from a node we are not connected to (node_id: {peer_id})");
         }
+
+        self.node_statistics
+            .add_received(&msg, self.is_peer_inbounds(&peer_id));
+
+        message
     }
 }
 
