@@ -1,5 +1,5 @@
-use std::collections::hash_map::Keys;
-use std::collections::HashMap;
+use hashbrown::hash_map::Keys;
+use hashbrown::HashMap;
 use std::hash::Hash;
 
 #[derive(Clone)]
@@ -26,6 +26,10 @@ where
 
     pub fn inner(&self) -> &HashMap<K, V> {
         &self.map
+    }
+
+    pub fn inner_mut(&mut self) -> &mut HashMap<K, V> {
+        &mut self.map
     }
 
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
