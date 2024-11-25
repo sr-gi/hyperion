@@ -185,6 +185,12 @@ impl Simulator {
         self.event_queue.pop()
     }
 
+    /// Get the time when the next event will be processed
+    pub fn get_next_event_time(&mut self) -> Option<u64> {
+        let scheduled_event = self.event_queue.peek()?;
+        Some(scheduled_event.time())
+    }
+
     pub fn get_random_txid(&mut self) -> TxId {
         self.rng.next_u32()
     }

@@ -76,6 +76,9 @@ fn main() -> anyhow::Result<()> {
         {
             simulator.add_event(e);
         }
+        // Record the initial time as the time when the first node sends out the transaction.
+        // We don't need to account for the time the source withholds it
+        let first_seen_time = simulator.get_next_event_time().unwrap();
 
         // Process events until the queue is empty
         while let Some(scheduled_event) = simulator.get_next_event() {
@@ -85,7 +88,7 @@ fn main() -> anyhow::Result<()> {
                     if msg.is_tx() && percentile_time == 0 {
                         nodes_reached += 1;
                         if nodes_reached as f32 >= target_node_count {
-                            percentile_time = current_time;
+                            percentile_time = current_time - first_seen_time;
                         }
                     }
                     for future_event in simulator
