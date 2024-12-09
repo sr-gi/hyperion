@@ -38,7 +38,7 @@ pub struct Cli {
     #[clap(long)]
     pub no_latency: bool,
     /// Number of times the simulation will be repeated. Smooths the statistical results
-    #[clap(long, short, default_value_t = 1)]
+    #[clap(short, default_value_t = 1)]
     pub n: u32,
 }
 
