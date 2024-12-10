@@ -116,18 +116,16 @@ impl Simulator {
         unreachable_count: usize,
         outbounds_count: usize,
         is_erlay: bool,
-        seed: Option<u64>,
+        seed: &mut Option<u64>,
         network_latency: bool,
     ) -> Self {
-        let seed = if let Some(seed) = seed {
-            log::info!("Using user provided rng seed: {}", seed);
-            seed
+        if let Some(s) = seed {
+            log::info!("Using user provided rng seed: {}", s);
         } else {
-            let s = thread_rng().next_u64();
-            log::info!("Using fresh rng seed: {}", s);
-            s
+            *seed = Some(thread_rng().next_u64());
+            log::info!("Using fresh rng seed: {}", seed.unwrap());
         };
-        let mut rng: StdRng = StdRng::seed_from_u64(seed);
+        let mut rng: StdRng = StdRng::seed_from_u64(seed.unwrap());
         let network = Network::new(
             reachable_count,
             unreachable_count,
