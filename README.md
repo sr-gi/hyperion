@@ -51,8 +51,11 @@ Options:
           Seed to run random activity generator deterministically
       --no-latency
           Don't add network latency to messages exchanges between peers. Useful for debugging
-  -n, --n <N>
+  -n <N>
           Number of times the simulation will be repeated. Smooths the statistical results [default: 1]
+      --output-file <OUTPUT_FILE>
+          The path to an output file where to store simulation results to, in csv.
+          If the file already exists, data will be appended to it, otherwise it will be created [aliases: out]
   -h, --help
           Print help
   -V, --version

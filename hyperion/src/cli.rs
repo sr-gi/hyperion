@@ -1,6 +1,7 @@
 use clap::Parser;
-use hyper_lib::MAX_OUTBOUND_CONNECTIONS;
 use log::LevelFilter;
+
+use hyper_lib::{SimulationParameters, MAX_OUTBOUND_CONNECTIONS};
 
 /// Default number of unreachable nodes in the simulated network.
 const UNREACHABLE_NODE_COUNT: usize = 100000;
@@ -40,6 +41,10 @@ pub struct Cli {
     /// Number of times the simulation will be repeated. Smooths the statistical results
     #[clap(short, default_value_t = 1)]
     pub n: u32,
+    /// An output file name where to store simulation results to, in csv.
+    /// If the file already exists, data will be appended to it, otherwise it will be created
+    #[clap(long, visible_alias = "out", verbatim_doc_comment)]
+    pub output_file: Option<String>,
 }
 
 impl Cli {
@@ -47,5 +52,9 @@ impl Cli {
         assert!(self.reachable >= 10 * self.outbounds,
             "Too few reachable peers. In order to allow enough randomness in the network topology generation, please make sure
             the number of reachable nodes is, at least, 10 times the number of outbound connections per node");
+    }
+
+    pub fn get_simulation_params(&self) -> SimulationParameters {
+        SimulationParameters::new(self.n, self.reachable, self.unreachable, self.erlay)
     }
 }

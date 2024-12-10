@@ -1,14 +1,15 @@
+use std::{path::PathBuf, str::FromStr};
+
 use clap::Parser;
 use indicatif::{ProgressIterator, ProgressStyle};
 use log::LevelFilter;
 use simple_logger::SimpleLogger;
-use std::time;
 
 use hyper_lib::simulator::{Event, Simulator};
 use hyperion::cli::Cli;
 
 fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
     cli.verify();
 
     SimpleLogger::new()
@@ -25,7 +26,7 @@ fn main() -> anyhow::Result<()> {
         cli.unreachable,
         cli.outbounds,
         cli.erlay,
-        cli.seed,
+        &mut cli.seed,
         !cli.no_latency,
     );
 
@@ -172,27 +173,41 @@ fn main() -> anyhow::Result<()> {
     }
 
     let avg_percentile_time = (overall_time as f32 / cli.n as f32).round() as u64;
-    log::info!(
-        "Transaction reached {}% of nodes in the network in {}s",
-        cli.percentile_target,
-        time::Duration::from_nanos(avg_percentile_time).as_secs_f32(),
-    );
-
     let statistics = simulator.network.get_statistics();
-    log::info!(
-        "Reachable nodes sent/received {}/{} messages ({}/{} bytes) (avg)",
-        statistics.avg_messages().sent_reachable() / cli.n as f32,
-        statistics.avg_messages().received_reachable() / cli.n as f32,
-        statistics.avg_bytes().sent_reachable() / cli.n as f32,
-        statistics.avg_bytes().received_reachable() / cli.n as f32,
+    let output_result = hyper_lib::OutputResult::new(
+        cli.percentile_target,
+        avg_percentile_time,
+        statistics,
+        cli.get_simulation_params(),
+        cli.seed.unwrap(),
     );
-    log::info!(
-        "Unreachable nodes sent/received {}/{} messages ({}/{} bytes) (avg)",
-        statistics.avg_messages().sent_unreachable() / cli.n as f32,
-        statistics.avg_messages().received_unreachable() / cli.n as f32,
-        statistics.avg_bytes().sent_unreachable() / cli.n as f32,
-        statistics.avg_bytes().received_unreachable() / cli.n as f32,
-    );
+    output_result.display();
+
+    // Store data in csv to the specified output file (if any)
+    if let Some(of) = cli.output_file {
+        let mut output_file = PathBuf::from_str(&of)?;
+        if let Some(a) = of.strip_prefix('~') {
+            if let Some(b) = of.strip_prefix("~/") {
+                output_file = home::home_dir().unwrap().join(b)
+            } else {
+                output_file = home::home_dir().unwrap().join(a)
+            }
+        };
+
+        log::info!("Storing results in {}", output_file.to_str().unwrap());
+        let mut wtr = csv::WriterBuilder::new()
+            // Only add headers if the file doesn't exist. Assume file is properly formatted otherwise
+            .has_headers(!std::fs::exists(&output_file)?)
+            .from_writer(
+                std::fs::OpenOptions::new()
+                    // create if missing + append
+                    .create(true)
+                    .append(true)
+                    .open(&output_file)?,
+            );
+        wtr.serialize(output_result)?;
+        wtr.flush()?;
+    }
 
     Ok(())
 }
