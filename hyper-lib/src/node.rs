@@ -1,6 +1,8 @@
+use std::sync::{Arc, Mutex};
+
 use hashbrown::HashMap;
+use rand::prelude::IteratorRandom;
 use rand::rngs::StdRng;
-use rand::seq::SliceRandom;
 use rand_distr::{Distribution, Exp};
 
 use crate::indexedmap::IndexedMap;
@@ -136,7 +138,7 @@ pub struct Node {
     /// The (global) node identifier
     node_id: NodeId,
     /// A pre-seeded rng to allow reproducing previous simulation results
-    rng: StdRng,
+    rng: Arc<Mutex<StdRng>>,
     /// Whether the node is reachable or not
     is_reachable: bool,
     /// Whether the node supports Erlay or not
@@ -160,7 +162,12 @@ pub struct Node {
 }
 
 impl Node {
-    pub fn new(node_id: NodeId, rng: StdRng, is_reachable: bool, is_erlay: bool) -> Self {
+    pub fn new(
+        node_id: NodeId,
+        rng: Arc<Mutex<StdRng>>,
+        is_reachable: bool,
+        is_erlay: bool,
+    ) -> Self {
         Node {
             node_id,
             rng,
@@ -225,7 +232,8 @@ impl Node {
                     peer_id
                 );
             }
-            poisson_timer.next_interval = current_time + poisson_timer.sample(&mut self.rng);
+            poisson_timer.next_interval =
+                current_time + poisson_timer.sample(&mut self.rng.lock().unwrap());
         }
         poisson_timer.next_interval
     }
@@ -341,7 +349,11 @@ impl Node {
     }
 
     /// Get the collection of peers selected to fanout the simulated transaction
-    fn get_fanout_targets(&mut self, peers: Vec<NodeId>, n: f64) -> Vec<NodeId> {
+    fn get_fanout_targets<K, I>(&self, peers: I, n: f64) -> Vec<K>
+    where
+        I: Iterator<Item = K>,
+        K: Copy,
+    {
         // Shortcut if we are not Erlay.
         // In theory, we would need to return the whole vector of peers, but this won't be used for non-erlay sims,
         // should_fanout_to would return true without checking the vector, so we can speed this up by just returning an empty vector
@@ -355,9 +367,8 @@ impl Node {
         // for multiples runs of the same simulation. This can be achieved by simply randomly sorting our peers using our pre-seeded rng.
         let target_size = n.round() as usize;
         peers
-            .choose_multiple(&mut self.rng, target_size)
-            .copied()
-            .collect()
+            .into_iter()
+            .choose_multiple(&mut *self.rng.lock().unwrap(), target_size)
     }
 
     /// Whether we should fanout the given transaction to the given peer.
@@ -384,17 +395,16 @@ impl Node {
         let mut events = Vec::new();
         // The fanout targets can be computed just once per transaction
         let inbound_fanout_targets = self.get_fanout_targets(
-            self.in_peers.keys().copied().collect::<Vec<_>>(),
+            self.in_peers.keys(),
             self.get_inbounds().len() as f64 * INBOUND_FANOUT_DESTINATIONS_FRACTION,
         );
-        let outbound_fanout_targets = self.get_fanout_targets(
-            self.out_peers.keys().copied().collect::<Vec<_>>(),
-            OUTBOUND_FANOUT_DESTINATIONS as f64,
-        );
+        let outbound_fanout_targets =
+            self.get_fanout_targets(self.out_peers.keys(), OUTBOUND_FANOUT_DESTINATIONS as f64);
 
         let fanout_targets = inbound_fanout_targets
             .into_iter()
             .chain(outbound_fanout_targets)
+            .copied()
             .collect::<Vec<_>>();
 
         for peer_id in peers {
@@ -1018,7 +1028,7 @@ mod test_node {
 
     #[test]
     fn test_get_next_announcement_time() {
-        let rng = StdRng::seed_from_u64(0);
+        let rng = Arc::new(Mutex::new(StdRng::from_entropy()));
         let node_id = 0;
         let mut node = Node::new(node_id, rng, true, true);
         let outbound_peer_ids = 1..10;
@@ -1074,7 +1084,7 @@ mod test_node {
 
     #[test]
     fn test_connections() {
-        let rng = StdRng::seed_from_u64(0);
+        let rng = Arc::new(Mutex::new(StdRng::from_entropy()));
         let node_id = 0;
         let mut node = Node::new(node_id, rng, true, true);
         let outbound_peer_ids = 1..10;
@@ -1094,7 +1104,7 @@ mod test_node {
 
     #[test]
     fn test_schedule_tx_announcement_no_erlay() {
-        let rng = StdRng::seed_from_u64(0);
+        let rng = Arc::new(Mutex::new(StdRng::from_entropy()));
         let node_id = 0;
         let mut node = Node::new(node_id, rng, true, true);
 
@@ -1119,7 +1129,7 @@ mod test_node {
 
     #[test]
     fn test_schedule_tx_announcement_erlay() {
-        let rng = StdRng::seed_from_u64(0);
+        let rng = Arc::new(Mutex::new(StdRng::from_entropy()));
         let node_id = 0;
         let mut node = Node::new(node_id, rng, true, true);
         let mut fanout_count = 0;
@@ -1173,7 +1183,7 @@ mod test_node {
 
     #[test]
     fn test_broadcast_tx() {
-        let rng = StdRng::seed_from_u64(0);
+        let rng = Arc::new(Mutex::new(StdRng::from_entropy()));
         let node_id = 0;
         let mut node = Node::new(node_id, rng, true, true);
         let outbound_peer_ids = Vec::from_iter(1..11);
@@ -1213,7 +1223,12 @@ mod test_node {
         // Try different number of outbound peers and check how the schedule matches the expectation
         let outbound_peers_sizes = [2, 4, 8];
         for peers_size in outbound_peers_sizes.iter() {
-            let mut node = Node::new(node_id, StdRng::seed_from_u64(0), true, true);
+            let mut node = Node::new(
+                node_id,
+                Arc::new(Mutex::new(StdRng::from_entropy())),
+                true,
+                true,
+            );
             // Connect the desired amount of nodes
             let outbound_peer_ids = Vec::from_iter(0..*peers_size);
             for peer_id in outbound_peer_ids.into_iter() {
@@ -1232,7 +1247,7 @@ mod test_node {
 
     #[test]
     fn test_process_scheduled_reconciliation() {
-        let rng = StdRng::seed_from_u64(0);
+        let rng = Arc::new(Mutex::new(StdRng::from_entropy()));
         let node_id = 0;
         let mut node = Node::new(node_id, rng, true, true);
         let outbound_peer_ids = Vec::from_iter(1..11);
@@ -1283,7 +1298,7 @@ mod test_node {
 
     #[test]
     fn test_process_scheduled_announcement() {
-        let rng = StdRng::seed_from_u64(0);
+        let rng = Arc::new(Mutex::new(StdRng::from_entropy()));
         let node_id = 0;
         let mut node = Node::new(node_id, rng, true, true);
         let current_time = 0;
@@ -1354,7 +1369,7 @@ mod test_node {
 
     #[test]
     fn test_add_request() {
-        let rng = StdRng::seed_from_u64(0);
+        let rng = Arc::new(Mutex::new(StdRng::from_entropy()));
         let node_id = 0;
         let mut node = Node::new(node_id, rng, true, true);
         let current_time = 0;
@@ -1394,7 +1409,7 @@ mod test_node {
 
     #[test]
     fn test_process_delayed_request() {
-        let rng = StdRng::seed_from_u64(0);
+        let rng = Arc::new(Mutex::new(StdRng::from_entropy()));
         let node_id = 0;
         let mut node = Node::new(node_id, rng, true, true);
         let current_time = 0;
