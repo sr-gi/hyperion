@@ -50,8 +50,7 @@ fn main() -> anyhow::Result<()> {
 
     let start_time = 0;
     let mut overall_time = 0;
-    let mut txid = simulator.get_random_txid();
-    let mut sent_txs = Vec::new();
+
     // Display a progress bar only if we are running in multi-simulation mode
     let sty = ProgressStyle::with_template(if cli.n > 1 {
         "Simulating [{wide_bar:.cyan/blue} {pos:>2}/{len:2}] {elapsed_precise}"
@@ -111,12 +110,12 @@ fn main() -> anyhow::Result<()> {
                         simulator.add_event(scheduled_event);
                     }
                 }
-                Event::ProcessDelayedRequest(target, txid) => {
+                Event::ProcessDelayedRequest(target, peer_id) => {
                     if let Some(delayed_event) = simulator
                         .network
                         .get_node_mut(target)
                         .unwrap()
-                        .process_delayed_request(txid, current_time)
+                        .process_delayed_request(peer_id, current_time)
                     {
                         simulator.add_event(delayed_event);
                     }
@@ -152,16 +151,6 @@ fn main() -> anyhow::Result<()> {
         // Make sure every node has received the transaction
         for node in simulator.network.get_nodes() {
             assert!(node.knows_transaction());
-        }
-
-        // Pick a new txid for the next iteration (if any)
-        if cli.n > 1 {
-            sent_txs.push(txid);
-            let mut new_txid = simulator.get_random_txid();
-            while sent_txs.contains(&new_txid) {
-                new_txid = simulator.get_random_txid();
-            }
-            txid = new_txid;
         }
 
         assert_ne!(percentile_time, 0);

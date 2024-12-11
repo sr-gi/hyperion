@@ -7,7 +7,7 @@ use rand::{thread_rng, Rng, RngCore, SeedableRng};
 
 use crate::network::{Link, Network, NetworkMessage};
 use crate::node::{Node, NodeId, RECON_REQUEST_INTERVAL};
-use crate::{TxId, SECS_TO_NANOS};
+use crate::SECS_TO_NANOS;
 
 /// An enumeration of all the events that can be created in a simulation
 #[derive(Clone, Hash, Eq, PartialEq, Debug)]
@@ -187,10 +187,6 @@ impl Simulator {
     pub fn get_next_event_time(&mut self) -> Option<u64> {
         let scheduled_event = self.event_queue.peek()?;
         Some(scheduled_event.time())
-    }
-
-    pub fn get_random_txid(&mut self) -> TxId {
-        self.rng.next_u32()
     }
 
     pub fn get_random_nodeid(&mut self) -> NodeId {
