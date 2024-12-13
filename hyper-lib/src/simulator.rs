@@ -1,6 +1,7 @@
 use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
 use std::hash::Hash;
+use std::sync::{Arc, Mutex};
 
 use rand::rngs::StdRng;
 use rand::{thread_rng, Rng, RngCore, SeedableRng};
@@ -103,7 +104,7 @@ impl From<ScheduledEvent> for (Event, u64) {
 
 pub struct Simulator {
     /// A pre-seeded rng to allow reproducing previous simulation results
-    rng: StdRng,
+    rng: Arc<Mutex<StdRng>>,
     /// The simulated network
     pub network: Network,
     /// A queue of the events that make the simulation, ordered by discrete time
@@ -125,14 +126,14 @@ impl Simulator {
             *seed = Some(thread_rng().next_u64());
             log::info!("Using fresh rng seed: {}", seed.unwrap());
         };
-        let mut rng: StdRng = StdRng::seed_from_u64(seed.unwrap());
+        let rng = Arc::new(Mutex::new(StdRng::seed_from_u64(seed.unwrap())));
         let network = Network::new(
             reachable_count,
             unreachable_count,
             outbounds_count,
             network_latency,
             is_erlay,
-            &mut rng,
+            rng.clone(),
         );
 
         Self {
@@ -152,6 +153,8 @@ impl Simulator {
                 // RECON_REQUEST_INTERVAL as the first scheduled reconciliation for each connection.
                 let delta = self
                     .rng
+                    .lock()
+                    .unwrap()
                     .gen_range(0..RECON_REQUEST_INTERVAL * SECS_TO_NANOS);
                 self.event_queue
                     .push(node.schedule_set_reconciliation(current_time + delta));
@@ -190,7 +193,10 @@ impl Simulator {
     }
 
     pub fn get_random_nodeid(&mut self) -> NodeId {
-        self.rng.gen_range(0..self.network.get_node_count())
+        self.rng
+            .lock()
+            .unwrap()
+            .gen_range(0..self.network.get_node_count())
     }
 
     pub fn get_node(&self, node_id: NodeId) -> Option<&Node> {
