@@ -349,11 +349,7 @@ impl Node {
     }
 
     /// Get the collection of peers selected to fanout the simulated transaction
-    fn get_fanout_targets<K, I>(&self, peers: I, n: f64) -> Vec<K>
-    where
-        I: Iterator<Item = K>,
-        K: Copy,
-    {
+    fn get_fanout_targets(&self) -> Vec<NodeId> {
         // Shortcut if we are not Erlay.
         // In theory, we would need to return the whole vector of peers, but this won't be used for non-erlay sims,
         // should_fanout_to would return true without checking the vector, so we can speed this up by just returning an empty vector
@@ -361,14 +357,29 @@ impl Node {
             return Vec::new();
         }
 
+        let mut locked_rng = self.rng.lock().unwrap();
+        let inbound_target_count = (self.get_inbounds().len() as f64
+            * INBOUND_FANOUT_DESTINATIONS_FRACTION)
+            .round() as usize;
+
         // In the real Bitcoin code, we perform a fancy ordering of the peers based on the transaction id that we want to send and the
         // peer_ids in our neighbourhood to obtain a deterministically random sorting from where we can pick our fanout peers.
         // In the simulator, we can make this way simpler, we only care about the ordering being deterministically random, and different
         // for multiples runs of the same simulation. This can be achieved by simply randomly sorting our peers using our pre-seeded rng.
-        let target_size = n.round() as usize;
-        peers
-            .into_iter()
-            .choose_multiple(&mut *self.rng.lock().unwrap(), target_size)
+        let mut targets = self
+            .out_peers
+            .keys()
+            .copied()
+            .choose_multiple(&mut *locked_rng, OUTBOUND_FANOUT_DESTINATIONS.into());
+
+        targets.extend(
+            self.in_peers
+                .keys()
+                .copied()
+                .choose_multiple(&mut *locked_rng, inbound_target_count),
+        );
+
+        targets
     }
 
     /// Whether we should fanout the given transaction to the given peer.
@@ -387,25 +398,17 @@ impl Node {
     /// We are initializing the transaction's originator interval sampling here. This is because we don't want to start
     /// sampling until we have something to send to our peers. Otherwise we would create useless events just for sampling.
     /// Notice this works since a Poisson process is memoryless hence past events do not affect future ones.
-    fn schedule_tx_announcement(
-        &mut self,
-        peers: Vec<NodeId>,
-        current_time: u64,
-    ) -> Vec<ScheduledEvent> {
+    fn schedule_tx_announcement(&mut self, current_time: u64) -> Vec<ScheduledEvent> {
         let mut events = Vec::new();
-        // The fanout targets can be computed just once per transaction
-        let inbound_fanout_targets = self.get_fanout_targets(
-            self.in_peers.keys(),
-            self.get_inbounds().len() as f64 * INBOUND_FANOUT_DESTINATIONS_FRACTION,
-        );
-        let outbound_fanout_targets =
-            self.get_fanout_targets(self.out_peers.keys(), OUTBOUND_FANOUT_DESTINATIONS as f64);
 
-        let fanout_targets = inbound_fanout_targets
-            .into_iter()
-            .chain(outbound_fanout_targets)
+        // Collecting since we need to use them in the following loop, which also accesses self mutably
+        let peers = self
+            .in_peers
+            .keys()
+            .chain(self.out_peers.keys())
             .copied()
             .collect::<Vec<_>>();
+        let fanout_targets = self.get_fanout_targets();
 
         for peer_id in peers {
             // Do not send the transaction to peers that already know about it (e.g. the peer that sent it to us)
@@ -455,17 +458,7 @@ impl Node {
     /// Returns a collection of the scheduled events
     pub fn broadcast_tx(&mut self, current_time: u64) -> Vec<ScheduledEvent> {
         self.add_known_transaction();
-
-        let mut events = self.schedule_tx_announcement(
-            self.out_peers.keys().cloned().collect::<Vec<_>>(),
-            current_time,
-        );
-        events.extend(self.schedule_tx_announcement(
-            self.in_peers.keys().cloned().collect::<Vec<_>>(),
-            current_time,
-        ));
-
-        events
+        self.schedule_tx_announcement(current_time)
     }
 
     /// Reconciliation requests, as opposed to INVs, are sent on a schedule, no matter if we have transactions to reconcile or not
@@ -1115,7 +1108,7 @@ mod test_node {
 
         // For non-erlay peers, schedule_tx_announcement creates an event for each peer
         // This is completely independent of whether the peer is inbound or outbound
-        let events = node.schedule_tx_announcement(outbound_peer_ids.clone(), 0);
+        let events = node.schedule_tx_announcement(0);
         assert_eq!(events.len(), outbound_peer_ids.len());
         for e in events {
             assert!(matches!(e.inner, Event::ProcessScheduledAnnouncement(..)));
@@ -1144,7 +1137,7 @@ mod test_node {
         // For Erlay peers, transactions are added to to_be_announced or to the peer reconciliation set
         // depending on whether or not the peer is selected for fanout. The decision making is performed by
         // should_fanout_to. Here, inbound and outbound peers only change the likelihood of being selected
-        let events = node.schedule_tx_announcement(outbound_peer_ids.clone(), current_time);
+        let events = node.schedule_tx_announcement(current_time);
         assert_eq!(events.len(), outbound_peer_ids.len());
         for e in events {
             assert!(matches!(e.inner, Event::ProcessScheduledAnnouncement(..)));
