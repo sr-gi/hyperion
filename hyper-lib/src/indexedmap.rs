@@ -1,4 +1,4 @@
-use hashbrown::hash_map::Keys;
+use hashbrown::hash_map::{Iter, Keys};
 use hashbrown::HashMap;
 use std::hash::Hash;
 
@@ -51,6 +51,10 @@ where
 
     pub fn keys(&self) -> Keys<'_, K, V> {
         self.map.keys()
+    }
+
+    pub fn iter(&self) -> Iter<'_, K, V> {
+        self.map.iter()
     }
 
     pub fn len(&self) -> usize {
