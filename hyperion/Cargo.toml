@@ -18,3 +18,6 @@ home = "0.5.9"
 indicatif = "0.17.8"
 log = "0.4.20"
 simple_logger = "5.0.0"
+
+[features]
+serde = ["hyper-lib/graph"]

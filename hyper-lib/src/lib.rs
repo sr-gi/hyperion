@@ -4,6 +4,7 @@ use serde::Serialize;
 
 use statistics::NetworkStatistics;
 
+#[cfg(feature = "graph")]
 pub mod graph;
 pub mod network;
 pub mod node;
