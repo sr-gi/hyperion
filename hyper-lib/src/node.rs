@@ -184,6 +184,16 @@ impl Node {
         }
     }
 
+    /// Whether the node is reachable or not
+    pub fn is_reachable(&self) -> bool {
+        self.is_reachable
+    }
+
+    /// Whether the node is erlay or not
+    pub fn is_erlay(&self) -> bool {
+        self.is_erlay
+    }
+
     // Resets the node state so a new round of the simulation can be run from a clean state
     pub fn reset(&mut self) {
         self.inbounds_poisson_timer.next_interval = 0;

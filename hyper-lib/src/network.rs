@@ -144,7 +144,6 @@ pub struct Network {
     nodes: Vec<Node>,
     // Links between nodes, with their associated latencies
     links: HashMap<Link, u64>,
-    network_latency: bool,
     is_erlay: bool,
     reachable_count: usize,
 }
@@ -230,9 +229,20 @@ impl Network {
         Self {
             nodes,
             links,
-            network_latency,
             is_erlay,
             reachable_count,
+        }
+    }
+
+    /// Builds a [Network] from a collection of (already connected) nodes and links.
+    /// Useful when creating simulations using the graph feature
+    #[cfg(feature = "graph")]
+    pub fn from_connected_nodes_and_links(nodes: Vec<Node>, links: HashMap<Link, u64>) -> Self {
+        Self {
+            links,
+            reachable_count: nodes.iter().filter(|n| n.is_reachable()).count(),
+            is_erlay: nodes.iter().all(|n| n.is_erlay()),
+            nodes,
         }
     }
 
@@ -370,11 +380,63 @@ impl Network {
         )
     }
 
-    pub fn has_latency(&self) -> bool {
-        self.network_latency
-    }
-
     pub fn get_links(&self) -> &HashMap<Link, u64> {
         &self.links
+    }
+}
+
+#[cfg(feature = "graph")]
+impl PartialEq for Network {
+    fn eq(&self, other: &Self) -> bool {
+        let mut self_sorted_nodes = self.nodes.clone();
+        self_sorted_nodes.sort_by_key(|n| n.get_id());
+        let mut other_sorted_nodes = other.nodes.clone();
+        other_sorted_nodes.sort_by_key(|n| n.get_id());
+
+        for (a, b) in self_sorted_nodes.iter().zip(other_sorted_nodes) {
+            // Outbounds are equal
+            {
+                let mut o1 = a.get_outbounds().keys().collect::<Vec<_>>();
+                let mut o2 = b.get_outbounds().keys().collect::<Vec<_>>();
+                o1.sort();
+                o2.sort();
+                if o1 != o2 {
+                    // Outbounds don't match
+                    return false;
+                }
+            }
+
+            // Inbounds are equal
+            {
+                let mut i1 = a.get_inbounds().keys().collect::<Vec<_>>();
+                let mut i2 = b.get_inbounds().keys().collect::<Vec<_>>();
+                i1.sort();
+                i2.sort();
+                if i1 != i2 {
+                    // Inbounds don't match
+                    return false;
+                }
+            }
+        }
+
+        // Links are equal
+        if self.get_links().len() != other.get_links().len() {
+            // Number of links don't match
+            return false;
+        }
+        let other_links = other.get_links();
+        for (link, weight) in self.get_links().iter() {
+            if let Some(other_weight) = other_links.get(link) {
+                if weight != other_weight {
+                    // Weights don't match
+                    return false;
+                }
+            } else {
+                // Link not found
+                return false;
+            }
+        }
+
+        true
     }
 }

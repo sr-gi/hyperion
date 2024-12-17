@@ -1,3 +1,5 @@
+#[cfg(feature = "graph")]
+use graphrs::Graph;
 use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
 use std::hash::Hash;
@@ -6,6 +8,8 @@ use std::sync::{Arc, Mutex};
 use rand::rngs::StdRng;
 use rand::{thread_rng, Rng, RngCore, SeedableRng};
 
+#[cfg(feature = "graph")]
+use crate::graph::NodeAttributes;
 use crate::network::{Link, Network, NetworkMessage};
 use crate::node::{Node, NodeId, RECON_REQUEST_INTERVAL};
 use crate::SECS_TO_NANOS;
@@ -143,6 +147,24 @@ impl Simulator {
         }
     }
 
+    // // Creates a simulator from a given [Network]. Useful when creating simulations using the graph feature
+    // #[cfg(feature = "graph")]
+    // pub fn from_graph(graph: Graph<NodeId, NodeAttributes>, seed: &mut Option<u64>) -> Self {
+    //     if let Some(s) = seed {
+    //         log::info!("Using user provided rng seed: {}", s);
+    //     } else {
+    //         *seed = Some(thread_rng().next_u64());
+    //         log::info!("Using fresh rng seed: {}", seed.unwrap());
+    //     };
+
+    //     let rng = Arc::new(Mutex::new(StdRng::seed_from_u64(seed.unwrap())));
+    //     Self {
+    //         rng: rng.clone(),
+    //         network: (graph, rng.clone()).into(),
+    //         event_queue: BinaryHeap::new(),
+    //     }
+    // }
+
     pub fn schedule_set_reconciliation(&mut self, current_time: u64) {
         if self.network.is_erlay() {
             for node in self.network.get_nodes_mut() {
@@ -166,16 +188,17 @@ impl Simulator {
     /// These latencies simulate the messages traveling across the network
     pub fn add_event(&mut self, mut scheduled_event: ScheduledEvent) {
         let event = &scheduled_event.inner;
-        if event.is_receive_message() && self.network.has_latency() {
-            let link = &event.get_link().unwrap();
-            let latency = *self.network.get_links().get(link).unwrap_or_else(|| {
-                panic!(
-                    "No connection found between node: {} and node {}",
-                    link.a(),
-                    link.b(),
-                )
-            });
-            scheduled_event.time.0 += latency;
+        if event.is_receive_message() {
+            if let Some(link) = event.get_link() {
+                let latency = *self.network.get_links().get(&link).unwrap_or_else(|| {
+                    panic!(
+                        "No connection found between node: {} and node {}",
+                        link.a(),
+                        link.b(),
+                    )
+                });
+                scheduled_event.time.0 += latency;
+            }
         }
 
         self.event_queue.push(scheduled_event);
