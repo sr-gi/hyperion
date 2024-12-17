@@ -8,6 +8,7 @@ use statistics::NetworkStatistics;
 pub mod graph;
 pub mod network;
 pub mod node;
+pub mod parse_graph;
 pub mod simulator;
 pub mod statistics;
 pub mod txreconciliation;

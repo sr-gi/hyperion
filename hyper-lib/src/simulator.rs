@@ -147,23 +147,23 @@ impl Simulator {
         }
     }
 
-    // Creates a simulator from a given [Network]. Useful when creating simulations using the graph feature
-    #[cfg(feature = "graph")]
-    pub fn from_graph(graph: Graph<NodeId, NodeAttributes>, seed: &mut Option<u64>) -> Self {
-        if let Some(s) = seed {
-            log::info!("Using user provided rng seed: {}", s);
-        } else {
-            *seed = Some(thread_rng().next_u64());
-            log::info!("Using fresh rng seed: {}", seed.unwrap());
-        };
+    // // Creates a simulator from a given [Network]. Useful when creating simulations using the graph feature
+    // #[cfg(feature = "graph")]
+    // pub fn from_graph(graph: Graph<NodeId, NodeAttributes>, seed: &mut Option<u64>) -> Self {
+    //     if let Some(s) = seed {
+    //         log::info!("Using user provided rng seed: {}", s);
+    //     } else {
+    //         *seed = Some(thread_rng().next_u64());
+    //         log::info!("Using fresh rng seed: {}", seed.unwrap());
+    //     };
 
-        let rng = Arc::new(Mutex::new(StdRng::seed_from_u64(seed.unwrap())));
-        Self {
-            rng: rng.clone(),
-            network: (graph, rng.clone()).into(),
-            event_queue: BinaryHeap::new(),
-        }
-    }
+    //     let rng = Arc::new(Mutex::new(StdRng::seed_from_u64(seed.unwrap())));
+    //     Self {
+    //         rng: rng.clone(),
+    //         network: (graph, rng.clone()).into(),
+    //         event_queue: BinaryHeap::new(),
+    //     }
+    // }
 
     pub fn schedule_set_reconciliation(&mut self, current_time: u64) {
         if self.network.is_erlay() {
