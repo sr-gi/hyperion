@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::io::Write;
 use std::rc::Rc;
 
 use hashbrown::HashMap;
@@ -162,6 +163,10 @@ pub struct Node {
     node_statistics: NodeStatistics,
     /// Cache of fanout targets for the simulated transaction
     fanout_targets: Vec<NodeId>,
+    /// Number of times a node has heard about the simulated transaction
+    heard_tx: (u16, u16),
+    /// Whether the transaction has already been announced to a peer
+    announced_tx: bool,
 }
 
 impl Node {
@@ -185,6 +190,8 @@ impl Node {
             outbounds_poisson_timer: PoissonTimer::new(OUTBOUND_INVENTORY_BROADCAST_INTERVAL),
             node_statistics: NodeStatistics::new(),
             fanout_targets: Vec::new(),
+            heard_tx: (0, 0),
+            announced_tx: false,
         }
     }
 
@@ -197,6 +204,7 @@ impl Node {
         self.delayed_request = None;
         self.known_transaction = false;
         self.fanout_targets.clear();
+        self.announced_tx = false;
 
         for in_peer in self.get_inbounds_mut().values_mut() {
             in_peer.reset();
@@ -422,6 +430,9 @@ impl Node {
             }
         }
 
+        // Backup the heard_tx count
+        self.heard_tx.0 = self.heard_tx.1;
+
         events
     }
 
@@ -488,13 +499,28 @@ impl Node {
         peer_id: NodeId,
         current_time: u64,
     ) -> Option<ScheduledEvent> {
+        // Record only once per node, right before the first announcement
+        if !self.announced_tx {
+            self.announced_tx = true;
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("out_count.txt")
+                .unwrap();
+
+            if self.heard_tx.0 != self.heard_tx.1 {
+                write!(
+                    file,
+                    "({}, {}, {})\n",
+                    self.heard_tx.0, self.heard_tx.1, self.is_reachable
+                )
+                .unwrap();
+            }
+        }
         let knows_tx = {
             let peer = self.get_peer_mut(&peer_id).unwrap();
             // Remove the transaction from to_be_announced. Skip if it doesn't exist
-            if !peer.drain_tx_to_be_announced() {
-                debug_log!(current_time, self.node_id, "Nothing to announce",);
-                return None;
-            }
+            assert!(peer.drain_tx_to_be_announced(), "Nothing to announce");
             peer.knows_transaction()
         };
 
@@ -743,6 +769,7 @@ impl Node {
         if let Some(peer) = self.get_peer(&peer_id) {
             match msg {
                 NetworkMessage::INV => {
+                    self.heard_tx.1 += 1;
                     self.get_peer_mut(&peer_id).unwrap().add_known_transaction();
                     // We only request transactions that we don't know about
                     if self.knows_transaction() {
