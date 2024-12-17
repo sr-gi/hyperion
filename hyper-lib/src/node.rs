@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::io::Write;
 use std::rc::Rc;
 
 use hashbrown::HashMap;
@@ -160,6 +161,7 @@ pub struct Node {
     outbounds_poisson_timer: PoissonTimer,
     /// Amount of messages of each time the node has sent/received
     node_statistics: NodeStatistics,
+    heard_tx: u16,
 }
 
 impl Node {
@@ -182,6 +184,7 @@ impl Node {
             inbounds_poisson_timer: PoissonTimer::new(INBOUND_INVENTORY_BROADCAST_INTERVAL),
             outbounds_poisson_timer: PoissonTimer::new(OUTBOUND_INVENTORY_BROADCAST_INTERVAL),
             node_statistics: NodeStatistics::new(),
+            heard_tx: 0,
         }
     }
 
@@ -426,6 +429,15 @@ impl Node {
                 next_interval,
             ));
         }
+
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("out_count.csv")
+            .unwrap();
+
+        write!(file, "{},", self.heard_tx).unwrap();
+
         events
     }
 
@@ -729,6 +741,7 @@ impl Node {
         if let Some(peer) = self.get_peer(&peer_id) {
             match msg {
                 NetworkMessage::INV => {
+                    self.heard_tx += 1;
                     self.get_peer_mut(&peer_id).unwrap().add_known_transaction();
                     // We only request transactions that we don't know about
                     if self.knows_transaction() {
