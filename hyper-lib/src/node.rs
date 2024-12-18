@@ -329,7 +329,7 @@ impl Node {
     }
 
     /// Get the collection of peers selected to fanout the simulated transaction
-    fn get_fanout_targets(&self) -> Vec<NodeId> {
+    fn get_fanout_targets(&self, filter: bool) -> Vec<NodeId> {
         // Shortcut if we are not Erlay.
         // In theory, we would need to return the whole vector of peers, but this won't be used for non-erlay sims,
         // should_fanout_to would return true without checking the vector, so we can speed this up by just returning an empty vector
@@ -342,20 +342,32 @@ impl Node {
             * INBOUND_FANOUT_DESTINATIONS_FRACTION)
             .round() as usize;
 
+        // Filter peers based on on whether they know the transaction (or bypass if the filter flag is false)
+        // If there are not sufficient peers to pick, the remaining peers are returned
+        let f = |peer: &&Peer, filter: bool| {
+            if filter {
+                !peer.knows_transaction()
+            } else {
+                true
+            }
+        };
+
         // In the real Bitcoin code, we perform a fancy ordering of the peers based on the transaction id that we want to send and the
-        // peer_ids in our neighbourhood to obtain a deterministically random sorting from where we can pick our fanout peers.
+        // peer_ids in our neighborhood to obtain a deterministically random sorting from where we can pick our fanout peers.
         // In the simulator, we can make this way simpler, we only care about the ordering being deterministically random, and different
         // for multiples runs of the same simulation. This can be achieved by simply randomly sorting our peers using our pre-seeded rng.
         let mut targets = self
             .out_peers
-            .keys()
-            .copied()
+            .iter()
+            .filter(|(_, peer)| f(peer, filter))
+            .map(|(k, _)| *k)
             .choose_multiple(&mut *locked_rng, OUTBOUND_FANOUT_DESTINATIONS.into());
 
         targets.extend(
             self.in_peers
-                .keys()
-                .copied()
+                .iter()
+                .filter(|(_, peer)| f(peer, filter))
+                .map(|(k, _)| *k)
                 .choose_multiple(&mut *locked_rng, inbound_target_count),
         );
 
@@ -388,7 +400,8 @@ impl Node {
             .chain(self.out_peers.keys())
             .copied()
             .collect::<Vec<_>>();
-        let fanout_targets = self.get_fanout_targets();
+        // FIXME: Pass this as CLI argument
+        let fanout_targets = self.get_fanout_targets(false);
 
         for peer_id in peers {
             // Do not send the transaction to peers that already know about it (e.g. the peer that sent it to us)
