@@ -156,7 +156,7 @@ pub struct Node {
     /// Poisson timer shared by all inbound peers. Used to decide when to announce transactions to them
     inbounds_poisson_timer: PoissonTimer,
     /// Map of poisson timers for outbound peers. Used to decide when to announce transactions to each of them
-    outbounds_poisson_timers: HashMap<NodeId, PoissonTimer>,
+    outbounds_poisson_timer: PoissonTimer,
     /// Amount of messages of each time the node has sent/received
     node_statistics: NodeStatistics,
 }
@@ -179,7 +179,7 @@ impl Node {
             delayed_request: None,
             known_transaction: false,
             inbounds_poisson_timer: PoissonTimer::new(INBOUND_INVENTORY_BROADCAST_INTERVAL),
-            outbounds_poisson_timers: HashMap::new(),
+            outbounds_poisson_timer: PoissonTimer::new(OUTBOUND_INVENTORY_BROADCAST_INTERVAL),
             node_statistics: NodeStatistics::new(),
         }
     }
@@ -187,9 +187,7 @@ impl Node {
     // Resets the node state so a new round of the simulation can be run from a clean state
     pub fn reset(&mut self) {
         self.inbounds_poisson_timer.next_interval = 0;
-        for timer in self.outbounds_poisson_timers.values_mut() {
-            timer.next_interval = 0;
-        }
+        self.outbounds_poisson_timer.next_interval = 0;
 
         self.requested_transaction = false;
         self.delayed_request = None;
@@ -205,33 +203,19 @@ impl Node {
     }
 
     /// Gets the next discrete time when a transaction announcement needs to be sent to a given peer.
-    /// A [peer_id] is required if the query is performed for an outbound peer, otherwise the request is
-    /// assumed to be for inbounds. The method will sample a new time if we have reached the old sample,
-    /// otherwise, the old sample will be returned.
+    /// For outbound peers, the method always returns a new sample.
+    /// For inbound peers, a new sample is computed only after the previous time has been reached, since
+    /// they are on a shared timer. Otherwise, the old sample will be returned.
     pub fn get_next_announcement_time(&mut self, current_time: u64, peer_id: NodeId) -> u64 {
         let is_inbound = self.is_peer_inbounds(&peer_id);
         let poisson_timer = if is_inbound {
             &mut self.inbounds_poisson_timer
         } else {
-            self.outbounds_poisson_timers
-                .get_mut(&peer_id).unwrap_or_else(|| panic!("Trying to schedule a new sample interval for a peer we are not connected to {}", peer_id))
+            &mut self.outbounds_poisson_timer
         };
 
-        if current_time >= poisson_timer.next_interval {
-            if is_inbound {
-                debug_log!(
-                    current_time,
-                    self.node_id,
-                    "Updating inbounds poisson timer"
-                );
-            } else {
-                debug_log!(
-                    current_time,
-                    self.node_id,
-                    "Updating poisson timer for peer {}",
-                    peer_id
-                );
-            }
+        // Outbounds and inbounds that have reached the previous interval do sample
+        if !is_inbound || current_time >= poisson_timer.next_interval {
             poisson_timer.next_interval =
                 current_time + poisson_timer.sample(&mut self.rng.lock().unwrap());
         }
@@ -291,10 +275,6 @@ impl Node {
                 .is_none(),
             "We ({}) are already connected to {peer_id}",
             self.node_id
-        );
-        self.outbounds_poisson_timers.insert(
-            peer_id,
-            PoissonTimer::new(OUTBOUND_INVENTORY_BROADCAST_INTERVAL),
         );
     }
 
@@ -1036,26 +1016,15 @@ mod test_node {
         }
 
         let current_time = 0;
-
+        // next_interval is initialized as 0
+        assert_eq!(node.outbounds_poisson_timer.next_interval, 0);
         for ref peer_id in outbound_peer_ids {
-            // next_interval is initialized as 0
-            assert_eq!(
-                node.outbounds_poisson_timers
-                    .get(peer_id)
-                    .unwrap()
-                    .next_interval,
-                0
-            );
             // Sampling a new interval should return a value geq than current time (mostly greater
             // but the sample could be zero).
-            let next_interval = node.get_next_announcement_time(current_time, *peer_id);
-            assert!(next_interval >= current_time);
-            // Sampling twice with the same current_time should return the exact same value, given we
-            // only update if a new sample is needed, and that only happens if next_interval is in the past
-            assert!(node.get_next_announcement_time(current_time, *peer_id) == next_interval);
-
-            // Sampling for a new interval (geq next_interval) will give you a new value
-            assert!(node.get_next_announcement_time(next_interval, *peer_id) > next_interval);
+            assert!(node.get_next_announcement_time(current_time, *peer_id) >= current_time);
+            // Sampling twice with the same current_time should return a different value, given outbounds
+            // do not share a timer
+            assert!(node.get_next_announcement_time(current_time, *peer_id) >= current_time);
         }
 
         assert_eq!(node.inbounds_poisson_timer.next_interval, 0);
@@ -1086,7 +1055,6 @@ mod test_node {
         for peer_id in outbound_peer_ids.clone() {
             node.connect(peer_id, true);
             assert!(node.out_peers.contains_key(&peer_id));
-            assert!(node.outbounds_poisson_timers.contains_key(&peer_id));
         }
 
         for peer_id in inbound_peer_ids.clone() {
