@@ -44,6 +44,7 @@ pub struct OutputResult {
     timestamp: u64,
     percentile_target: u16,
     percentile_time: u64,
+    full_propagation_time: u64,
     #[serde(rename = "r-sent-msgs")]
     reachable_sent_msgs: f32,
     #[serde(rename = "r-received-msgs")]
@@ -73,6 +74,7 @@ impl OutputResult {
     pub fn new(
         percentile_target: u16,
         percentile_time: u64,
+        full_propagation_time: u64,
         statistics: NetworkStatistics,
         sim_params: SimulationParameters,
         seed: u64,
@@ -87,6 +89,7 @@ impl OutputResult {
                 .as_secs(),
             percentile_time,
             percentile_target,
+            full_propagation_time,
             reachable_sent_msgs: avg_msgs.sent_reachable() / n_float,
             reachable_received_msgs: avg_msgs.received_reachable() / n_float,
             reachable_sent_bytes: avg_bytes.sent_reachable() / n_float,
@@ -109,6 +112,12 @@ impl OutputResult {
             self.percentile_target,
             Duration::from_nanos(self.percentile_time).as_secs_f32()
         );
+        if self.percentile_target < 100 {
+            log::info!(
+                "Transaction reached all nodes in {}s",
+                Duration::from_nanos(self.full_propagation_time).as_secs_f32()
+            );
+        }
         log::info!(
             "Reachable nodes sent/received {}/{} messages ({}/{} bytes) (avg)",
             self.reachable_sent_msgs,
