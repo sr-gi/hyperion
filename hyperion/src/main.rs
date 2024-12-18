@@ -49,6 +49,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     let start_time = 0;
+    let mut overall_propagation_time = 0;
     let mut overall_time = 0;
 
     // Display a progress bar only if we are running in multi-simulation mode
@@ -64,6 +65,7 @@ fn main() -> anyhow::Result<()> {
         // For statistical purposes
         let mut nodes_reached = 1;
         let mut percentile_time = 0;
+        let mut propagation_time = 0;
 
         // Bootstrap the set reconciliation events (if needed) and send out the transaction.
         // All simulations start at time 0 so we don't have to carry any offset when computing
@@ -85,10 +87,12 @@ fn main() -> anyhow::Result<()> {
             let (event, current_time) = scheduled_event.into();
             match event {
                 Event::ReceiveMessageFrom(src, dst, msg) => {
-                    if msg.is_tx() && percentile_time == 0 {
+                    if msg.is_tx() {
                         nodes_reached += 1;
-                        if nodes_reached as f32 >= target_node_count {
+                        if percentile_time == 0 && nodes_reached as f32 >= target_node_count {
                             percentile_time = current_time - first_seen_time;
+                        } else if nodes_reached == node_count {
+                            propagation_time = current_time - first_seen_time;
                         }
                     }
                     for future_event in simulator
@@ -155,6 +159,7 @@ fn main() -> anyhow::Result<()> {
 
         assert_ne!(percentile_time, 0);
         overall_time += percentile_time;
+        overall_propagation_time += propagation_time;
 
         for node in simulator.network.get_nodes_mut() {
             node.reset();
@@ -162,10 +167,12 @@ fn main() -> anyhow::Result<()> {
     }
 
     let avg_percentile_time = (overall_time as f32 / cli.n as f32).round() as u64;
+    let avg_propagation_time = (overall_propagation_time as f32 / cli.n as f32).round() as u64;
     let statistics = simulator.network.get_statistics();
     let output_result = hyper_lib::OutputResult::new(
         cli.percentile_target,
         avg_percentile_time,
+        avg_propagation_time,
         statistics,
         cli.get_simulation_params(),
         cli.seed.unwrap(),
