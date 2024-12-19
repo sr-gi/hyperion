@@ -419,8 +419,7 @@ impl Node {
             );
             // Schedule the announcement to go off on the next trickle for the given peer
             // Notice reconciliation requests are not on a poisson timer, they are triggered every fix interval.
-            // However, transactions are made available to reconcile following the peer's poisson timer (check
-            // [TxReconciliationState::make_snapshot])
+            // However, transactions are made available to reconcile following the peer's poisson timer
             events.push(ScheduledEvent::new(
                 Event::process_scheduled_announcement(self.node_id, peer_id),
                 next_interval,
