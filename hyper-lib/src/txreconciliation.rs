@@ -33,10 +33,6 @@ pub struct TxReconciliationState {
     is_reconciling: bool,
     /// Whether the simulated transaction is in the reconciliation set
     recon_set: bool,
-    /// Whether the simulated transaction is in pending to be added to the reconciliation set the next trickle.
-    /// These is still unrequestable for privacy reasons (to prevent transaction proving), the transaction will became
-    /// available once it would have been announced via fanout (on the next trickle).
-    delayed_set: bool,
 }
 
 impl TxReconciliationState {
@@ -45,21 +41,13 @@ impl TxReconciliationState {
             is_initiator,
             is_reconciling: false,
             recon_set: false,
-            delayed_set: false,
         }
     }
 
-    pub fn clear(&mut self, include_delayed: bool) -> bool {
-        // The transaction cannot be in both sets at the same time
-        assert!(!(self.recon_set && self.delayed_set));
-
+    pub fn clear(&mut self) -> bool {
         let recon_set = self.recon_set;
         self.is_reconciling = false;
         self.recon_set = false;
-
-        if include_delayed {
-            self.delayed_set = false;
-        }
 
         recon_set
     }
@@ -69,8 +57,8 @@ impl TxReconciliationState {
     }
 
     pub fn add_tx(&mut self) -> bool {
-        let r = !self.delayed_set;
-        self.delayed_set = true;
+        let r = !self.recon_set;
+        self.recon_set = true;
 
         r
     }
@@ -80,14 +68,7 @@ impl TxReconciliationState {
     /// result in one additional INV (belonging to this transaction). This is equivalent to two INVs crossing, and AFAIK,
     /// there's nothing we can do about it
     pub fn remove_tx(&mut self) {
-        self.delayed_set = false;
         self.recon_set = false;
-    }
-
-    // Make delayed transactions available for reconciliation
-    pub fn make_delayed_available(&mut self) {
-        self.recon_set = self.delayed_set;
-        self.delayed_set = false;
     }
 
     pub fn set_reconciling(&mut self) {
@@ -133,51 +114,24 @@ impl TxReconciliationState {
 mod test {
     use super::*;
 
-    impl TxReconciliationState {
-        pub(crate) fn get_delayed_set(&self) -> bool {
-            self.delayed_set
-        }
-    }
-
     #[test]
     fn test_recon_state() {
         let mut tx_recon_state = TxReconciliationState::new(true);
         tx_recon_state.set_reconciling();
         assert!(tx_recon_state.is_reconciling());
         assert!(!tx_recon_state.recon_set);
-        assert!(!tx_recon_state.delayed_set);
 
         // Add a transaction to the recon_set
         tx_recon_state.add_tx();
 
-        // Check that the transaction has been added to the delayed
-        // set, but the recon set remains empty
-        assert!(!tx_recon_state.recon_set);
-        assert!(tx_recon_state.delayed_set);
-        assert!(tx_recon_state.is_reconciling());
-
-        // Move to available and check again
-        tx_recon_state.make_delayed_available();
+        // Check that the transaction has been added to the recon set
         assert!(tx_recon_state.recon_set);
-        assert!(!tx_recon_state.delayed_set);
         assert!(tx_recon_state.is_reconciling());
 
-        // Clear, not including delayed (they are only included when cleaning after a simulation)
-        // and check that both sets are empty
-        tx_recon_state.clear(/*include_delayed=*/ false);
+        // Clear, and check that the set is empty
+        tx_recon_state.clear();
         assert!(!tx_recon_state.recon_set);
-        assert!(!tx_recon_state.delayed_set);
         assert!(!tx_recon_state.is_reconciling());
-
-        // Add again, leave data in delayed and clear
-        tx_recon_state.add_tx();
-        tx_recon_state.clear(/*include_delayed=*/ true);
-        assert!(!tx_recon_state.recon_set);
-        assert!(!tx_recon_state.delayed_set);
-        assert!(!tx_recon_state.is_reconciling());
-
-        // If data is held in recon_set, delayed_set must be empty
-        // so not testing that case
     }
 
     #[test]
@@ -197,7 +151,6 @@ mod test {
 
         // Add the tx to the recon set
         tx_recon_state.add_tx();
-        tx_recon_state.make_delayed_available();
 
         // Change their sketch, since now the difference will be 1
         diff_size = 1;
@@ -210,7 +163,7 @@ mod test {
         assert!(their_diff);
 
         // Update it so now we don't know but they do
-        tx_recon_state.clear(true);
+        tx_recon_state.clear();
         their_sketch = Sketch::new(true, diff_size);
         assert!(their_sketch.get_size() == diff_size);
 
@@ -222,7 +175,6 @@ mod test {
         // Update it so both of us know the transaction
         diff_size = 0;
         tx_recon_state.add_tx();
-        tx_recon_state.make_delayed_available();
         their_sketch = Sketch::new(true, diff_size);
 
         // Compute the diffs and check. We both know the transaction, so both diff should be false
