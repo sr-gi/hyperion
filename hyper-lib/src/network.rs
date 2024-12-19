@@ -3,7 +3,8 @@ use crate::statistics::NetworkStatistics;
 use crate::txreconciliation::Sketch;
 use crate::SECS_TO_NANOS;
 
-use std::sync::{Arc, Mutex};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use hashbrown::{HashMap, HashSet};
 use rand::rngs::StdRng;
@@ -156,7 +157,7 @@ impl Network {
         outbounds_count: usize,
         network_latency: bool,
         is_erlay: bool,
-        rng: Arc<Mutex<StdRng>>,
+        rng: Rc<RefCell<StdRng>>,
     ) -> Self {
         let mut reachable_nodes = (0..reachable_count)
             .map(|i| Node::new(i, rng.clone(), true, is_erlay))
@@ -174,7 +175,7 @@ impl Network {
         );
 
         let peers_die = Uniform::from(0..reachable_nodes.len());
-        let mut locked_rng = rng.lock().unwrap();
+        let mut borrowed_rng = rng.borrow_mut();
 
         log::info!(
             "Connecting unreachable nodes to reachable ({} outbounds per node)",
@@ -185,7 +186,7 @@ impl Network {
             &mut reachable_nodes,
             outbounds_count,
             is_erlay,
-            &mut locked_rng,
+            &mut borrowed_rng,
             &peers_die,
         );
 
@@ -197,7 +198,7 @@ impl Network {
             &mut reachable_nodes,
             outbounds_count,
             is_erlay,
-            &mut locked_rng,
+            &mut borrowed_rng,
             &peers_die,
         ));
 
@@ -219,7 +220,7 @@ impl Network {
                 .map(|link_id| {
                     (
                         link_id,
-                        net_latency_fn.sample(&mut *locked_rng).round() as u64,
+                        net_latency_fn.sample(&mut *borrowed_rng).round() as u64,
                     )
                 })
                 .collect()
