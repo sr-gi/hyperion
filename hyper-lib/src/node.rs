@@ -1,4 +1,5 @@
-use std::sync::{Arc, Mutex};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use hashbrown::HashMap;
 use rand::prelude::IteratorRandom;
@@ -138,7 +139,7 @@ pub struct Node {
     /// The (global) node identifier
     node_id: NodeId,
     /// A pre-seeded rng to allow reproducing previous simulation results
-    rng: Arc<Mutex<StdRng>>,
+    rng: Rc<RefCell<StdRng>>,
     /// Whether the node is reachable or not
     is_reachable: bool,
     /// Whether the node supports Erlay or not
@@ -164,7 +165,7 @@ pub struct Node {
 impl Node {
     pub fn new(
         node_id: NodeId,
-        rng: Arc<Mutex<StdRng>>,
+        rng: Rc<RefCell<StdRng>>,
         is_reachable: bool,
         is_erlay: bool,
     ) -> Self {
@@ -217,7 +218,7 @@ impl Node {
         // Outbounds and inbounds that have reached the previous interval do sample
         if !is_inbound || current_time >= poisson_timer.next_interval {
             poisson_timer.next_interval =
-                current_time + poisson_timer.sample(&mut self.rng.lock().unwrap());
+                current_time + poisson_timer.sample(&mut self.rng.borrow_mut());
         }
         poisson_timer.next_interval
     }
@@ -337,7 +338,7 @@ impl Node {
             return Vec::new();
         }
 
-        let mut locked_rng = self.rng.lock().unwrap();
+        let mut borrowed_rng = self.rng.borrow_mut();
         let inbound_target_count = (self.get_inbounds().len() as f64
             * INBOUND_FANOUT_DESTINATIONS_FRACTION)
             .round() as usize;
@@ -350,13 +351,13 @@ impl Node {
             .out_peers
             .keys()
             .copied()
-            .choose_multiple(&mut *locked_rng, OUTBOUND_FANOUT_DESTINATIONS.into());
+            .choose_multiple(&mut *borrowed_rng, OUTBOUND_FANOUT_DESTINATIONS.into());
 
         targets.extend(
             self.in_peers
                 .keys()
                 .copied()
-                .choose_multiple(&mut *locked_rng, inbound_target_count),
+                .choose_multiple(&mut *borrowed_rng, inbound_target_count),
         );
 
         targets
@@ -1000,7 +1001,7 @@ mod test_node {
 
     #[test]
     fn test_get_next_announcement_time() {
-        let rng = Arc::new(Mutex::new(StdRng::from_entropy()));
+        let rng = Rc::new(RefCell::new(StdRng::from_entropy()));
         let node_id = 0;
         let mut node = Node::new(node_id, rng, true, true);
         let outbound_peer_ids = 1..10;
@@ -1045,7 +1046,7 @@ mod test_node {
 
     #[test]
     fn test_connections() {
-        let rng = Arc::new(Mutex::new(StdRng::from_entropy()));
+        let rng = Rc::new(RefCell::new(StdRng::from_entropy()));
         let node_id = 0;
         let mut node = Node::new(node_id, rng, true, true);
         let outbound_peer_ids = 1..10;
@@ -1064,7 +1065,7 @@ mod test_node {
 
     #[test]
     fn test_schedule_tx_announcement_no_erlay() {
-        let rng = Arc::new(Mutex::new(StdRng::from_entropy()));
+        let rng = Rc::new(RefCell::new(StdRng::from_entropy()));
         let node_id = 0;
         let mut node = Node::new(node_id, rng, true, true);
 
@@ -1089,7 +1090,7 @@ mod test_node {
 
     #[test]
     fn test_schedule_tx_announcement_erlay() {
-        let rng = Arc::new(Mutex::new(StdRng::from_entropy()));
+        let rng = Rc::new(RefCell::new(StdRng::from_entropy()));
         let node_id = 0;
         let mut node = Node::new(node_id, rng, true, true);
         let mut fanout_count = 0;
@@ -1143,7 +1144,7 @@ mod test_node {
 
     #[test]
     fn test_broadcast_tx() {
-        let rng = Arc::new(Mutex::new(StdRng::from_entropy()));
+        let rng = Rc::new(RefCell::new(StdRng::from_entropy()));
         let node_id = 0;
         let mut node = Node::new(node_id, rng, true, true);
         let outbound_peer_ids = Vec::from_iter(1..11);
@@ -1185,7 +1186,7 @@ mod test_node {
         for peers_size in outbound_peers_sizes.iter() {
             let mut node = Node::new(
                 node_id,
-                Arc::new(Mutex::new(StdRng::from_entropy())),
+                Rc::new(RefCell::new(StdRng::from_entropy())),
                 true,
                 true,
             );
@@ -1207,7 +1208,7 @@ mod test_node {
 
     #[test]
     fn test_process_scheduled_reconciliation() {
-        let rng = Arc::new(Mutex::new(StdRng::from_entropy()));
+        let rng = Rc::new(RefCell::new(StdRng::from_entropy()));
         let node_id = 0;
         let mut node = Node::new(node_id, rng, true, true);
         let outbound_peer_ids = Vec::from_iter(1..11);
@@ -1258,7 +1259,7 @@ mod test_node {
 
     #[test]
     fn test_process_scheduled_announcement() {
-        let rng = Arc::new(Mutex::new(StdRng::from_entropy()));
+        let rng = Rc::new(RefCell::new(StdRng::from_entropy()));
         let node_id = 0;
         let mut node = Node::new(node_id, rng, true, true);
         let current_time = 0;
@@ -1329,7 +1330,7 @@ mod test_node {
 
     #[test]
     fn test_add_request() {
-        let rng = Arc::new(Mutex::new(StdRng::from_entropy()));
+        let rng = Rc::new(RefCell::new(StdRng::from_entropy()));
         let node_id = 0;
         let mut node = Node::new(node_id, rng, true, true);
         let current_time = 0;
@@ -1369,7 +1370,7 @@ mod test_node {
 
     #[test]
     fn test_process_delayed_request() {
-        let rng = Arc::new(Mutex::new(StdRng::from_entropy()));
+        let rng = Rc::new(RefCell::new(StdRng::from_entropy()));
         let node_id = 0;
         let mut node = Node::new(node_id, rng, true, true);
         let current_time = 0;
