@@ -4,10 +4,10 @@ use crate::network::NetworkMessage;
 
 #[derive(Clone, Copy)]
 struct Data {
-    from_inbounds: u32,
-    from_outbounds: u32,
-    to_inbounds: u32,
-    to_outbounds: u32,
+    from_inbounds: u64,
+    from_outbounds: u64,
+    to_inbounds: u64,
+    to_outbounds: u64,
 }
 
 impl Data {
@@ -89,7 +89,7 @@ impl NodeStatistics {
         };
 
         *to += 1;
-        *bytes += msg.get_size() as u32;
+        *bytes += msg.get_size() as u64;
     }
 
     /// Adds a receive message to the statistics
@@ -103,10 +103,10 @@ impl NodeStatistics {
         };
 
         *from += 1;
-        *bytes += msg.get_size() as u32;
+        *bytes += msg.get_size() as u64;
     }
 
-    pub fn get_sent_count(&self) -> u32 {
+    pub fn get_sent_count(&self) -> u64 {
         self.inv.to_inbounds
             + self.inv.to_outbounds
             + self.get_data.to_inbounds
@@ -121,7 +121,7 @@ impl NodeStatistics {
             + self.reconcildiff.to_outbounds
     }
 
-    pub fn get_sent_to_inbounds_count(&self) -> u32 {
+    pub fn get_sent_to_inbounds_count(&self) -> u64 {
         self.inv.to_inbounds
             + self.get_data.to_inbounds
             + self.tx.to_inbounds
@@ -130,7 +130,7 @@ impl NodeStatistics {
             + self.reconcildiff.to_inbounds
     }
 
-    pub fn get_sent_to_outbounds_count(&self) -> u32 {
+    pub fn get_sent_to_outbounds_count(&self) -> u64 {
         self.inv.to_outbounds
             + self.get_data.to_outbounds
             + self.tx.to_outbounds
@@ -139,7 +139,7 @@ impl NodeStatistics {
             + self.reconcildiff.to_outbounds
     }
 
-    pub fn get_received_count(&self) -> u32 {
+    pub fn get_received_count(&self) -> u64 {
         self.inv.from_inbounds
             + self.inv.from_outbounds
             + self.get_data.from_inbounds
@@ -154,7 +154,7 @@ impl NodeStatistics {
             + self.reconcildiff.from_outbounds
     }
 
-    pub fn get_received_from_inbounds_count(&self) -> u32 {
+    pub fn get_received_from_inbounds_count(&self) -> u64 {
         self.inv.from_inbounds
             + self.get_data.from_inbounds
             + self.tx.from_inbounds
@@ -163,7 +163,7 @@ impl NodeStatistics {
             + self.reconcildiff.from_inbounds
     }
 
-    pub fn get_received_from_outbounds_count(&self) -> u32 {
+    pub fn get_received_from_outbounds_count(&self) -> u64 {
         self.inv.from_outbounds
             + self.get_data.from_outbounds
             + self.tx.from_outbounds
@@ -172,27 +172,27 @@ impl NodeStatistics {
             + self.reconcildiff.from_outbounds
     }
 
-    pub fn get_sent_bytes(&self) -> u32 {
+    pub fn get_sent_bytes(&self) -> u64 {
         self.bytes.to_inbounds + self.bytes.to_outbounds
     }
 
-    pub fn get_sent_to_inbounds_bytes(&self) -> u32 {
+    pub fn get_sent_to_inbounds_bytes(&self) -> u64 {
         self.bytes.to_inbounds
     }
 
-    pub fn get_sent_to_outbounds_bytes(&self) -> u32 {
+    pub fn get_sent_to_outbounds_bytes(&self) -> u64 {
         self.bytes.to_outbounds
     }
 
-    pub fn get_received_bytes(&self) -> u32 {
+    pub fn get_received_bytes(&self) -> u64 {
         self.bytes.from_inbounds + self.bytes.from_outbounds
     }
 
-    pub fn get_received_from_outbounds_bytes(&self) -> u32 {
+    pub fn get_received_from_outbounds_bytes(&self) -> u64 {
         self.bytes.from_outbounds
     }
 
-    pub fn get_received_from_inbounds_bytes(&self) -> u32 {
+    pub fn get_received_from_inbounds_bytes(&self) -> u64 {
         self.bytes.from_inbounds
     }
 }
