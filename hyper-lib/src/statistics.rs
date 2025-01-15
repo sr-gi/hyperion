@@ -195,6 +195,22 @@ impl NodeStatistics {
     pub fn get_received_from_inbounds_bytes(&self) -> u64 {
         self.bytes.from_inbounds
     }
+
+    pub fn get_tx_sent_to_inbounds(&self) -> u64 {
+        self.tx.to_inbounds
+    }
+
+    pub fn get_tx_sent_to_outbounds(&self) -> u64 {
+        self.tx.to_outbounds
+    }
+
+    pub fn get_tx_received_from_inbounds(&self) -> u64 {
+        self.tx.from_inbounds
+    }
+
+    pub fn get_tx_received_from_outbounds(&self) -> u64 {
+        self.tx.from_outbounds
+    }
 }
 
 impl Default for NodeStatistics {
@@ -299,6 +315,32 @@ impl NetworkStatistics {
             sent_unreachable: self.unreachable_stats.get_sent_bytes() as f32
                 / self.unreachable_count as f32,
             received_unreachable: self.unreachable_stats.get_received_bytes() as f32
+                / self.unreachable_count as f32,
+        }
+    }
+
+    pub fn avg_tx_inbounds(&self) -> AveragedStatistics {
+        AveragedStatistics {
+            sent_reachable: self.reachable_stats.get_tx_sent_to_inbounds() as f32
+                / self.reachable_count as f32,
+            received_reachable: self.reachable_stats.get_tx_received_from_inbounds() as f32
+                / self.reachable_count as f32,
+            sent_unreachable: self.unreachable_stats.get_tx_sent_to_inbounds() as f32
+                / self.unreachable_count as f32,
+            received_unreachable: self.unreachable_stats.get_tx_received_from_inbounds() as f32
+                / self.unreachable_count as f32,
+        }
+    }
+
+    pub fn avg_tx_outbounds(&self) -> AveragedStatistics {
+        AveragedStatistics {
+            sent_reachable: self.reachable_stats.get_tx_sent_to_outbounds() as f32
+                / self.reachable_count as f32,
+            received_reachable: self.reachable_stats.get_tx_received_from_outbounds() as f32
+                / self.reachable_count as f32,
+            sent_unreachable: self.unreachable_stats.get_tx_sent_to_outbounds() as f32
+                / self.unreachable_count as f32,
+            received_unreachable: self.unreachable_stats.get_tx_received_from_outbounds() as f32
                 / self.unreachable_count as f32,
         }
     }
