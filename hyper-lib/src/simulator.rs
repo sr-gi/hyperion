@@ -110,6 +110,9 @@ pub struct Simulator {
     pub network: Network,
     /// A queue of the events that make the simulation, ordered by discrete time
     event_queue: BinaryHeap<ScheduledEvent>,
+    /// A cached random node identifier, initialized before the network is computed and
+    /// re-written every time get_random_nodeid is called
+    cached_node_id: NodeId,
 }
 
 impl Simulator {
@@ -128,6 +131,10 @@ impl Simulator {
             log::info!("Using fresh rng seed: {}", seed.unwrap());
         };
         let rng = Rc::new(RefCell::new(StdRng::seed_from_u64(seed.unwrap())));
+        let random_node_id = rng
+            .borrow_mut()
+            .gen_range(0..reachable_count + unreachable_count);
+
         let network = Network::new(
             reachable_count,
             unreachable_count,
@@ -141,6 +148,7 @@ impl Simulator {
             rng,
             network,
             event_queue: BinaryHeap::new(),
+            cached_node_id: random_node_id,
         }
     }
 
@@ -193,9 +201,12 @@ impl Simulator {
     }
 
     pub fn get_random_nodeid(&mut self) -> NodeId {
-        self.rng
+        let random_node_id = self.cached_node_id;
+        self.cached_node_id = self
+            .rng
             .borrow_mut()
-            .gen_range(0..self.network.get_node_count())
+            .gen_range(0..self.network.get_node_count());
+        random_node_id
     }
 
     pub fn get_node(&self, node_id: NodeId) -> Option<&Node> {
