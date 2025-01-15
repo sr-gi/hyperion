@@ -89,8 +89,9 @@ impl NetworkMessage {
             NetworkMessage::INV => 36,
             // Type of entry + hash (4+32 bytes) * number of entries
             NetworkMessage::GETDATA => 36,
-            // Each node will receive the transaction exactly once, we can count this as zero
-            NetworkMessage::TX => 0,
+            // Each node will receive the transaction exactly once. The exact value here doesn't matter much, as long as it is within
+            // a reasonable size for a transaction. If made to small, it could be mistaken as other messages, like INVs
+            NetworkMessage::TX => 192,
             // Not counting the size of periodic requests, check the previous comment for rationale
             NetworkMessage::REQRECON(_) => 0,
             // The sketch size is based on the expected difference of the sets, 4-bytes per count
