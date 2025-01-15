@@ -65,6 +65,8 @@ pub struct OutputResult {
     reachable_count: usize,
     #[serde(rename = "u")]
     unreachable_count: usize,
+    out_fanout: usize,
+    in_fanout: f32,
     n: u32,
     erlay: bool,
     seed: u64,
@@ -98,6 +100,8 @@ impl OutputResult {
             unreachable_received_msgs: avg_msgs.received_unreachable() / n_float,
             unreachable_sent_bytes: avg_bytes.sent_unreachable() / n_float,
             unreachable_received_bytes: avg_bytes.received_unreachable() / n_float,
+            out_fanout: *crate::node::OUTBOUND_FANOUT_DESTINATIONS,
+            in_fanout: (*crate::node::INBOUND_FANOUT_DESTINATIONS_FRACTION) as f32,
             n: sim_params.n,
             reachable_count: sim_params.reachable,
             unreachable_count: sim_params.unreachable,

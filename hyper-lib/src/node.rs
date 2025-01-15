@@ -1,7 +1,9 @@
 use std::cell::RefCell;
+use std::env;
 use std::rc::Rc;
 
 use hashbrown::HashMap;
+use once_cell::sync::Lazy;
 use rand::prelude::IteratorRandom;
 use rand::rngs::StdRng;
 use rand_distr::{Distribution, Exp};
@@ -18,8 +20,18 @@ pub type NodeId = usize;
 static INBOUND_INVENTORY_BROADCAST_INTERVAL: u64 = 5;
 static OUTBOUND_INVENTORY_BROADCAST_INTERVAL: u64 = 2;
 static NONPREF_PEER_TX_DELAY: u64 = 2;
-static OUTBOUND_FANOUT_DESTINATIONS: u16 = 1;
-static INBOUND_FANOUT_DESTINATIONS_FRACTION: f64 = 0.1;
+pub(crate) static OUTBOUND_FANOUT_DESTINATIONS: Lazy<usize> = Lazy::new(|| {
+    env::var("OUTBOUND_FANOUT_DESTINATIONS")
+        .ok()
+        .and_then(|val| val.parse::<usize>().ok())
+        .unwrap_or(1)
+});
+pub(crate) static INBOUND_FANOUT_DESTINATIONS_FRACTION: Lazy<f64> = Lazy::new(|| {
+    env::var("INBOUND_FANOUT_DESTINATIONS_FRACTION")
+        .ok()
+        .and_then(|val| val.parse::<f64>().ok())
+        .unwrap_or(0.1)
+});
 pub static RECON_REQUEST_INTERVAL: u64 = 8;
 
 macro_rules! debug_log {
@@ -340,7 +352,7 @@ impl Node {
 
         let mut borrowed_rng = self.rng.borrow_mut();
         let inbound_target_count = (self.get_inbounds().len() as f64
-            * INBOUND_FANOUT_DESTINATIONS_FRACTION)
+            * *INBOUND_FANOUT_DESTINATIONS_FRACTION)
             .round() as usize;
 
         // In the real Bitcoin code, we perform a fancy ordering of the peers based on the transaction id that we want to send and the
@@ -351,7 +363,7 @@ impl Node {
             .out_peers
             .keys()
             .copied()
-            .choose_multiple(&mut *borrowed_rng, OUTBOUND_FANOUT_DESTINATIONS.into());
+            .choose_multiple(&mut *borrowed_rng, *OUTBOUND_FANOUT_DESTINATIONS);
 
         targets.extend(
             self.in_peers
@@ -1138,8 +1150,8 @@ mod test_node {
         }
 
         // With 10 outbound peers, one should be picked as fanout, and the rest as set recon
-        assert_eq!(fanout_count, OUTBOUND_FANOUT_DESTINATIONS);
-        assert_eq!(reconciliation_count, 10 - OUTBOUND_FANOUT_DESTINATIONS);
+        assert_eq!(fanout_count, *OUTBOUND_FANOUT_DESTINATIONS);
+        assert_eq!(reconciliation_count, 10 - *OUTBOUND_FANOUT_DESTINATIONS);
     }
 
     #[test]
