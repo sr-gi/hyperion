@@ -17,9 +17,19 @@ use crate::SECS_TO_NANOS;
 
 pub type NodeId = usize;
 
-static INBOUND_INVENTORY_BROADCAST_INTERVAL: u64 = 5;
-static OUTBOUND_INVENTORY_BROADCAST_INTERVAL: u64 = 2;
-static NONPREF_PEER_TX_DELAY: u64 = 2;
+pub(crate) static INBOUND_INVENTORY_BROADCAST_INTERVAL: Lazy<u64> = Lazy::new(|| {
+    env::var("INBOUND_INVENTORY_BROADCAST_INTERVAL")
+        .ok()
+        .and_then(|val| val.parse::<u64>().ok())
+        .unwrap_or(5)
+});
+pub(crate) static OUTBOUND_INVENTORY_BROADCAST_INTERVAL: Lazy<u64> = Lazy::new(|| {
+    env::var("OUTBOUND_INVENTORY_BROADCAST_INTERVAL")
+        .ok()
+        .and_then(|val| val.parse::<u64>().ok())
+        .unwrap_or(2)
+});
+
 pub(crate) static OUTBOUND_FANOUT_DESTINATIONS: Lazy<usize> = Lazy::new(|| {
     env::var("OUTBOUND_FANOUT_DESTINATIONS")
         .ok()
@@ -32,7 +42,9 @@ pub(crate) static INBOUND_FANOUT_DESTINATIONS_FRACTION: Lazy<f64> = Lazy::new(||
         .and_then(|val| val.parse::<f64>().ok())
         .unwrap_or(0.1)
 });
-pub static RECON_REQUEST_INTERVAL: u64 = 8;
+
+static NONPREF_PEER_TX_DELAY: u64 = 2;
+pub(crate) static RECON_REQUEST_INTERVAL: u64 = 8;
 
 macro_rules! debug_log {
     ($time:tt, $id:expr, $($arg:tt)*)
@@ -191,8 +203,8 @@ impl Node {
             requested_transaction: false,
             delayed_request: None,
             known_transaction: false,
-            inbounds_poisson_timer: PoissonTimer::new(INBOUND_INVENTORY_BROADCAST_INTERVAL),
-            outbounds_poisson_timer: PoissonTimer::new(OUTBOUND_INVENTORY_BROADCAST_INTERVAL),
+            inbounds_poisson_timer: PoissonTimer::new(*INBOUND_INVENTORY_BROADCAST_INTERVAL),
+            outbounds_poisson_timer: PoissonTimer::new(*OUTBOUND_INVENTORY_BROADCAST_INTERVAL),
             node_statistics: NodeStatistics::new(),
         }
     }
