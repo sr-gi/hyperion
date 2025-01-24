@@ -1,10 +1,10 @@
-use hashbrown::hash_map::Keys;
-use hashbrown::HashMap;
+use std::collections::btree_map::Keys;
+use std::collections::BTreeMap;
 use std::hash::Hash;
 
 #[derive(Clone)]
 pub struct IndexedMap<K, V> {
-    map: HashMap<K, V>,
+    map: BTreeMap<K, V>,
     // Consider storing references. I didn't do it because that means carrying the lifetime
     // over all the objects including this map
     // If we are on with adding lifetimes, making this a Cycle iterator may also be an option
@@ -14,21 +14,21 @@ pub struct IndexedMap<K, V> {
 
 impl<K, V> IndexedMap<K, V>
 where
-    K: Hash + Eq + Copy,
+    K: Hash + Eq + Copy + Ord,
 {
     pub fn new() -> Self {
         Self {
-            map: HashMap::new(),
+            map: BTreeMap::new(),
             order: Vec::new(),
             next_index: 0,
         }
     }
 
-    pub fn inner(&self) -> &HashMap<K, V> {
+    pub fn inner(&self) -> &BTreeMap<K, V> {
         &self.map
     }
 
-    pub fn inner_mut(&mut self) -> &mut HashMap<K, V> {
+    pub fn inner_mut(&mut self) -> &mut BTreeMap<K, V> {
         &mut self.map
     }
 
