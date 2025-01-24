@@ -6,9 +6,9 @@ use crate::SECS_TO_NANOS;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use hashbrown::{HashMap, HashSet};
 use rand::rngs::StdRng;
 use rand_distr::{Distribution, LogNormal, Uniform};
+use std::collections::{HashMap, HashSet};
 
 static NET_LATENCY_MEAN: f64 = 0.01 * SECS_TO_NANOS as f64; // 10ms
 

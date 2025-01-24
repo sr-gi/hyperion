@@ -1,8 +1,8 @@
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::env;
 use std::rc::Rc;
 
-use hashbrown::HashMap;
 use once_cell::sync::Lazy;
 use rand::prelude::IteratorRandom;
 use rand::rngs::StdRng;
@@ -169,7 +169,7 @@ pub struct Node {
     /// Whether the node supports Erlay or not
     is_erlay: bool,
     /// Map of inbound peers identified by their (global) node identifier
-    in_peers: HashMap<NodeId, Peer>,
+    in_peers: BTreeMap<NodeId, Peer>,
     /// Map of outbound peers identified by their (global) node identifier
     out_peers: IndexedMap<NodeId, Peer>,
     /// Whether the transaction has been requested (but not yet received)
@@ -198,7 +198,7 @@ impl Node {
             rng,
             is_reachable,
             is_erlay,
-            in_peers: HashMap::new(),
+            in_peers: BTreeMap::new(),
             out_peers: IndexedMap::new(),
             requested_transaction: false,
             delayed_request: None,
@@ -263,19 +263,19 @@ impl Node {
         self.node_id
     }
 
-    pub fn get_inbounds(&self) -> &HashMap<NodeId, Peer> {
+    pub fn get_inbounds(&self) -> &BTreeMap<NodeId, Peer> {
         &self.in_peers
     }
 
-    pub fn get_inbounds_mut(&mut self) -> &mut HashMap<NodeId, Peer> {
+    pub fn get_inbounds_mut(&mut self) -> &mut BTreeMap<NodeId, Peer> {
         &mut self.in_peers
     }
 
-    pub fn get_outbounds(&self) -> &HashMap<NodeId, Peer> {
+    pub fn get_outbounds(&self) -> &BTreeMap<NodeId, Peer> {
         self.out_peers.inner()
     }
 
-    pub fn get_outbounds_mut(&mut self) -> &mut HashMap<NodeId, Peer> {
+    pub fn get_outbounds_mut(&mut self) -> &mut BTreeMap<NodeId, Peer> {
         self.out_peers.inner_mut()
     }
 
