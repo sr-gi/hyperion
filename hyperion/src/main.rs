@@ -29,18 +29,6 @@ fn main() -> anyhow::Result<()> {
         &mut cli.seed,
         !cli.no_latency,
     );
-
-    // Pick a (source) node to broadcast the target transaction from.
-    let source_node_id = simulator.get_random_nodeid();
-    let reachable_source = source_node_id < cli.reachable;
-    log::info!(
-        "Starting simulation: broadcasting transaction from node {source_node_id} ({})",
-        if reachable_source {
-            "reachable"
-        } else {
-            "unreachable"
-        }
-    );
     if cli.n > 1 {
         log::info!(
             "The simulation will be run {} times and results will be averaged",
@@ -62,6 +50,17 @@ fn main() -> anyhow::Result<()> {
     .progress_chars("##-");
 
     for _ in (0..cli.n).progress().with_style(sty) {
+        // Pick a (source) node to broadcast the target transaction from
+        let source_node_id = simulator.get_random_nodeid();
+        log::debug!(
+            "Starting simulation: broadcasting transaction from node {source_node_id} ({})",
+            if source_node_id < cli.reachable {
+                "reachable"
+            } else {
+                "unreachable"
+            }
+        );
+
         // For statistical purposes
         let mut nodes_reached = 1;
         let mut percentile_time = 0;
