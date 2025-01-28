@@ -49,18 +49,26 @@ pub struct OutputResult {
     reachable_sent_msgs: f32,
     #[serde(rename = "r-received-msgs")]
     reachable_received_msgs: f32,
+    #[serde(rename = "r-msgs-volume")]
+    reachable_msg_volume: f32,
     #[serde(rename = "r-sent-bytes")]
     reachable_sent_bytes: f32,
     #[serde(rename = "r-received-bytes")]
     reachable_received_bytes: f32,
+    #[serde(rename = "r-bytes-volume")]
+    reachable_bytes_volume: f32,
     #[serde(rename = "u-sent-msgs")]
     unreachable_sent_msgs: f32,
     #[serde(rename = "u-received-msgs")]
     unreachable_received_msgs: f32,
+    #[serde(rename = "u-msgs-volume")]
+    unreachable_msg_volume: f32,
     #[serde(rename = "u-sent-bytes")]
     unreachable_sent_bytes: f32,
     #[serde(rename = "u-received-bytes")]
     unreachable_received_bytes: f32,
+    #[serde(rename = "u-bytes-volume")]
+    unreachable_bytes_volume: f32,
     #[serde(rename = "r")]
     reachable_count: usize,
     #[serde(rename = "u")]
@@ -96,12 +104,21 @@ impl OutputResult {
             full_propagation_time,
             reachable_sent_msgs: avg_msgs.sent_reachable() / n_float,
             reachable_received_msgs: avg_msgs.received_reachable() / n_float,
+            reachable_msg_volume: (avg_msgs.sent_reachable() + avg_msgs.received_reachable())
+                / n_float,
             reachable_sent_bytes: avg_bytes.sent_reachable() / n_float,
             reachable_received_bytes: avg_bytes.received_reachable() / n_float,
+            reachable_bytes_volume: (avg_bytes.sent_reachable() + avg_bytes.received_reachable())
+                / n_float,
             unreachable_sent_msgs: avg_msgs.sent_unreachable() / n_float,
             unreachable_received_msgs: avg_msgs.received_unreachable() / n_float,
+            unreachable_msg_volume: (avg_msgs.sent_unreachable() + avg_msgs.received_unreachable())
+                / n_float,
             unreachable_sent_bytes: avg_bytes.sent_unreachable() / n_float,
             unreachable_received_bytes: avg_bytes.received_unreachable() / n_float,
+            unreachable_bytes_volume: (avg_bytes.sent_unreachable()
+                + avg_bytes.received_unreachable())
+                / n_float,
             out_fanout: *crate::node::OUTBOUND_FANOUT_DESTINATIONS,
             in_fanout: (*crate::node::INBOUND_FANOUT_DESTINATIONS_FRACTION) as f32,
             in_poisson_mean: *crate::node::INBOUND_INVENTORY_BROADCAST_INTERVAL as u16,
@@ -127,18 +144,14 @@ impl OutputResult {
             );
         }
         log::info!(
-            "Reachable nodes sent/received {}/{} messages ({}/{} bytes) (avg)",
-            self.reachable_sent_msgs,
-            self.reachable_received_msgs,
-            self.reachable_sent_bytes,
-            self.reachable_received_bytes
+            "Reachable nodes data volume: {} messages ({} bytes) (avg)",
+            self.reachable_msg_volume,
+            self.reachable_bytes_volume
         );
         log::info!(
-            "Unreachable nodes sent/received {}/{} messages ({}/{} bytes) (avg)",
-            self.unreachable_sent_msgs,
-            self.unreachable_received_msgs,
-            self.unreachable_sent_bytes,
-            self.unreachable_received_bytes
+            "Unreachable nodes data volume: {} messages ({} bytes) (avg)",
+            self.unreachable_msg_volume,
+            self.unreachable_bytes_volume
         );
     }
 }
