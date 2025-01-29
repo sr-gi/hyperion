@@ -73,7 +73,7 @@ fn main() -> anyhow::Result<()> {
         for e in simulator
             .get_node_mut(source_node_id)
             .unwrap()
-            .broadcast_tx(start_time)
+            .broadcast_tx(start_time, true)
         {
             simulator.add_event(e);
         }
