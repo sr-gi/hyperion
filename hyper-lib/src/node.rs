@@ -694,7 +694,13 @@ impl Node {
                     assert!(self.is_erlay, "Trying to send a reconciliation difference to peer (peer_id: {peer_id}) but we do not support Erlay");
                     assert!(peer.is_erlay(), "Trying to send a reconciliation difference to peer (peer_id: {peer_id}), but they do not support Erlay");
                     assert!(peer.get_tx_reconciliation_state().unwrap().is_reconciling(), "Trying to send a reconciliation difference to a peer that hasn't requested so (peer_id: {peer_id})");
-                    if wants_tx {
+                    // The transaction can be included in the RECONCILDIFF message if we have it on the peer's delayed_set
+                    if wants_tx
+                        && !peer
+                            .get_tx_reconciliation_state()
+                            .unwrap()
+                            .get_delayed_set()
+                    {
                         assert!(!self.knows_transaction(), "Trying to request a transaction from a peer (peer_id: {peer_id}), but we should already know about");
                     }
                     self.get_peer_mut(&peer_id)
@@ -804,17 +810,18 @@ impl Node {
                     let peer_recon_state = peer.get_tx_reconciliation_state().unwrap();
                     let (mut local_diff, remote_diff) =
                         peer_recon_state.compute_sketch_diff(sketch);
+                    let in_delayed_set = peer_recon_state.get_delayed_set();
 
-                    // Flag the peer as knowing the transaction  if we both know it. Any other of the two partial knowing cases
-                    // (local_diff or remote_diff set, but not both) will be flagged either when we send them the transactions or when they
-                    // send them to us
+                    // Flag the peer as knowing the transaction if we both know it (remote_diff is 1 XOR 1 AND 1.
+                    // Any other of the two partial knowing cases (local_diff or remote_diff set, but not both) will be flagged either
+                    // when we send them the transactions or when they send them to us
                     if !remote_diff && peer_recon_state.get_recon_set() {
                         self.get_peer_mut(&peer_id).unwrap().add_known_transaction();
                     }
 
-                    // If we know the transaction but it is not in their recon set,  we picked this node for fanout.
+                    // If we know the transaction but it is not in their recon set (nor delayed set), we picked this node for fanout.
                     // Flag peer as knowing and do not request it via set reconciliation
-                    if local_diff && self.knows_transaction() {
+                    if local_diff && !in_delayed_set && self.knows_transaction() {
                         local_diff = false;
                         self.get_peer_mut(&peer_id).unwrap().add_known_transaction();
                     }

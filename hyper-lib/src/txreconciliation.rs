@@ -102,6 +102,10 @@ impl TxReconciliationState {
         self.recon_set
     }
 
+    pub fn get_delayed_set(&self) -> bool {
+        self.delayed_set
+    }
+
     pub fn compute_sketch(&self, they_know_tx: bool) -> Sketch {
         // q cannot be easily predicted in a short simulation, however it is needed to size the sketch properly.
         // As a workaround, the sketches exchanges by the simulator are not really sketches, but knowledge of whether
@@ -121,7 +125,7 @@ impl TxReconciliationState {
 
         // A XOR B to see if there is a diff
         let diff = local_set ^ remote_set;
-        // If there us a diff, each end's diff is whether the other end knows the transaction
+        // If there is a diff, each end's diff is whether the other end knows the transaction
         let local_diff = diff && remote_set;
         let remote_diff = diff && local_set;
 
@@ -132,12 +136,6 @@ impl TxReconciliationState {
 #[cfg(test)]
 mod test {
     use super::*;
-
-    impl TxReconciliationState {
-        pub(crate) fn get_delayed_set(&self) -> bool {
-            self.delayed_set
-        }
-    }
 
     #[test]
     fn test_recon_state() {
