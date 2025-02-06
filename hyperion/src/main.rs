@@ -129,13 +129,10 @@ fn main() -> anyhow::Result<()> {
                     // all messages in the queue
                     let node = simulator.network.get_node(src).unwrap();
                     if !node.knows_transaction()
-                        || !node.get_outbounds().keys().all(|node_id| {
-                            simulator
-                                .network
-                                .get_node(*node_id)
-                                .unwrap()
-                                .knows_transaction()
-                        })
+                        || !node
+                            .get_outbounds()
+                            .values()
+                            .all(|peer| peer.already_announced())
                     {
                         // Processing an scheduled reconciliation will return the reconciliation flow
                         // start, plus the scheduling of the next reconciliation (with the next peer in line)
@@ -154,6 +151,9 @@ fn main() -> anyhow::Result<()> {
         // Make sure every node has received the transaction
         for node in simulator.network.get_nodes() {
             assert!(node.knows_transaction());
+            for peer in node.get_outbounds().values() {
+                assert!(peer.already_announced())
+            }
         }
 
         assert_ne!(percentile_time, 0);

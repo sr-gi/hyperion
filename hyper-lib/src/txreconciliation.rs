@@ -125,11 +125,12 @@ impl TxReconciliationState {
 
         // A XOR B to see if there is a diff
         let diff = local_set ^ remote_set;
-        // If there is a diff, each end's diff is whether the other end knows the transaction
-        let local_diff = diff && remote_set;
-        let remote_diff = diff && local_set;
+        // If there is a diff, we can compute whether to offer or request the transaction based on the other side's knowledge
+        // No diff means that either both have it or none does, so there's nothing to send/request
+        let request_tx = diff && remote_set;
+        let offer_tx = diff && local_set;
 
-        (local_diff, remote_diff)
+        (request_tx, offer_tx)
     }
 }
 
