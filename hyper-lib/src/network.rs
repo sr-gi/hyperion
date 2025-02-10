@@ -96,11 +96,10 @@ impl NetworkMessage {
             NetworkMessage::REQRECON(_) => 0,
             // The sketch size is based on the expected difference of the sets, 4-bytes per count
             NetworkMessage::SKETCH(s) => s.get_size() * 4,
-            // 1 byte signaling whether the received sketch could ber properly decoded, plus n bytes,
-            // depending on the number of missing transactions (4 bytes per count)
+            // n bytes, depending on the number of missing transactions (4 bytes per count)
             // Notice `RECONCILDIFF` doesn't include the success byte, because we assume the decoding
-            // always succeeds in our simulations
-            NetworkMessage::RECONCILDIFF(ask_ids) => 1 + (*ask_ids as usize) * 4,
+            // always succeeds in our simulations. This doesn't affect the size either, since it is a constant term
+            NetworkMessage::RECONCILDIFF(ask_ids) => *ask_ids as usize * 4,
         }
     }
 
