@@ -8,7 +8,6 @@ use rand::prelude::IteratorRandom;
 use rand::rngs::StdRng;
 use rand_distr::{Distribution, Exp};
 
-use crate::indexedmap::IndexedMap;
 use crate::network::NetworkMessage;
 use crate::simulator::{Event, ScheduledEvent};
 use crate::statistics::NodeStatistics;
@@ -183,7 +182,7 @@ pub struct Node {
     /// Map of inbound peers identified by their (global) node identifier
     in_peers: BTreeMap<NodeId, Peer>,
     /// Map of outbound peers identified by their (global) node identifier
-    out_peers: IndexedMap<NodeId, Peer>,
+    out_peers: BTreeMap<NodeId, Peer>,
     /// Whether the transaction has been requested (but not yet received)
     requested_transaction: bool,
     /// Whether a request for the simulated transaction has been delayed (see [Node::add_request])
@@ -211,7 +210,7 @@ impl Node {
             is_reachable,
             is_erlay,
             in_peers: BTreeMap::new(),
-            out_peers: IndexedMap::new(),
+            out_peers: BTreeMap::new(),
             requested_transaction: false,
             delayed_request: None,
             known_transaction: false,
@@ -284,11 +283,11 @@ impl Node {
     }
 
     pub fn get_outbounds(&self) -> &BTreeMap<NodeId, Peer> {
-        self.out_peers.inner()
+        &self.out_peers
     }
 
     pub fn get_outbounds_mut(&mut self) -> &mut BTreeMap<NodeId, Peer> {
-        self.out_peers.inner_mut()
+        &mut self.out_peers
     }
 
     /// Check whether a given peer is an inbound connection
@@ -480,46 +479,57 @@ impl Node {
     /// Reconciliation requests, as opposed to INVs, are sent on a schedule, no matter if we have transactions to reconcile or not
     /// (since our peer may have and we are unaware of this).
     /// Schedule the next reconciliation request.
-    pub fn schedule_set_reconciliation(&mut self, request_time: u64) -> ScheduledEvent {
-        // Make it so we reconcile with all peers every RECON_REQUEST_INTERVAL
-        let delta = ((RECON_REQUEST_INTERVAL as f64 / self.out_peers.len() as f64)
-            * SECS_TO_NANOS as f64)
-            .round() as u64;
+    pub fn schedule_set_reconciliation(
+        &self,
+        peer_id: &NodeId,
+        request_time: u64,
+    ) -> ScheduledEvent {
         ScheduledEvent::new(
-            Event::process_scheduled_reconciliation(self.node_id),
-            request_time + delta,
+            Event::process_scheduled_reconciliation(self.node_id, *peer_id),
+            request_time,
         )
     }
 
-    /// Processes a previously scheduled reconciliation request. This starts the set reconciliation message exchange
+    /// Processes a previously scheduled reconciliation request. This starts the set reconciliation message exchange.
+    /// This creates a recurring reconciliation schedule for a given peer as long as the transaction has not been announced
+    /// over that link. Afterwards the scheduling is dropped.
     pub fn process_scheduled_reconciliation(
         &mut self,
+        peer_id: &NodeId,
         request_time: u64,
-    ) -> (ScheduledEvent, ScheduledEvent) {
+    ) -> Vec<ScheduledEvent> {
         // Peers are selected for set reconciliation in a round robin manner. This is managed internally by our IndexedMap
-        let (next_peer_id, next_peer) = self.out_peers.get_next();
         debug_log!(
             request_time,
             self.node_id,
-            "Requesting transaction reconciliation to peer_id: {next_peer_id}",
+            "Requesting transaction reconciliation to peer_id: {peer_id}",
         );
 
-        let to_be_reconciled = next_peer
-            .get_tx_reconciliation_state()
-            .unwrap()
-            .get_recon_set();
+        let mut events = Vec::new();
+        let peer = self.get_peer(peer_id).unwrap();
+        let recon_state = peer.get_tx_reconciliation_state().unwrap();
 
-        // Return two events, one starting the reconciliation flow for the given peer, and another one
-        // scheduling the next reconciliation request (for the next peer in line)
-        (
-            self.send_message_to(
-                NetworkMessage::REQRECON(to_be_reconciled),
-                next_peer_id,
-                request_time,
-            )
-            .unwrap(),
-            self.schedule_set_reconciliation(request_time),
-        )
+        // Drop the periodic reconciliation if the transaction has already been announced though this link
+        if !(self.knows_transaction() && peer.already_announced()) {
+            // Do no request a reconciliation if we are already reconciling. This should never happen outside testing given the
+            // long RECON_REQUEST_INTERVAL, but better safe than sorry
+            if !recon_state.is_reconciling() {
+                events.push(
+                    self.send_message_to(
+                        NetworkMessage::REQRECON(recon_state.get_recon_set()),
+                        *peer_id,
+                        request_time,
+                    )
+                    .unwrap(),
+                )
+            }
+            events.push(self.schedule_set_reconciliation(
+                peer_id,
+                request_time + RECON_REQUEST_INTERVAL * SECS_TO_NANOS,
+            ));
+        }
+
+        events
     }
 
     /// Processes a previously scheduled transaction announcement to a given peer, returning an event to be scheduled if successful
@@ -1243,39 +1253,6 @@ mod test_node {
     }
 
     #[test]
-    fn test_schedule_set_reconciliation() {
-        let node_id = 0;
-        let current_time = 0;
-
-        // schedule_set_reconciliation works so we reconcile with all our outbound peers once every RECON_REQUEST_INTERVAL.
-        // So each peer is scheduled to be reconciled with every RECON_REQUEST_INTERVAL/outbound_peers.len()
-
-        // Try different number of outbound peers and check how the schedule matches the expectation
-        let outbound_peers_sizes = [2, 4, 8];
-        for peers_size in outbound_peers_sizes.iter() {
-            let mut node = Node::new(
-                node_id,
-                Rc::new(RefCell::new(StdRng::from_entropy())),
-                true,
-                true,
-            );
-            // Connect the desired amount of nodes
-            let outbound_peer_ids = Vec::from_iter(0..*peers_size);
-            for peer_id in outbound_peer_ids.into_iter() {
-                node.connect(peer_id, true);
-            }
-
-            // Check the schedule (we use request_time=0 for simplicity)
-            let e = node.schedule_set_reconciliation(current_time);
-            assert!(matches!(e.inner, Event::ProcessScheduledReconciliation(..)));
-            assert_eq!(
-                e.time(),
-                (RECON_REQUEST_INTERVAL / *peers_size as u64) * SECS_TO_NANOS
-            )
-        }
-    }
-
-    #[test]
     fn test_process_scheduled_reconciliation() {
         let rng = Rc::new(RefCell::new(StdRng::from_entropy()));
         let node_id = 0;
@@ -1300,8 +1277,11 @@ mod test_node {
 
         // Iterating over again to process the reconciliations because we want peers
         // to be connected already
-        for _ in outbound_peer_ids.iter() {
-            let (req_recon, scheduled_recon) = node.process_scheduled_reconciliation(current_time);
+        for peer_id in outbound_peer_ids.iter() {
+            // The transaction has not been flagged as announced over this link, so the return is guaranteed
+            let mut events = node.process_scheduled_reconciliation(peer_id, current_time);
+            let scheduled_recon = events.pop().unwrap();
+            let req_recon = events.pop().unwrap();
 
             // Check that we receive the two events we are expecting, and that reconciliation request (former event)
             // contains the transaction
@@ -1319,11 +1299,26 @@ mod test_node {
             ))
         }
 
-        // After processing all peers, next_peer should be back to the first
-        assert_eq!(
-            node.out_peers.get_next().0,
-            *outbound_peer_ids.first().unwrap()
-        );
+        // Flag the transaction as announced over some links and check again. The flagged links should have an empty
+        // return from process_scheduled_reconciliation, resulting on the loop ending for that peer
+        for (i, peer_id) in outbound_peer_ids.iter().enumerate() {
+            // Flag peer and not reconciling (was set as so in the previous loop)
+            let peer = node.get_peer_mut(peer_id).unwrap();
+            peer.get_tx_reconciliation_state_mut().unwrap().clear(true);
+
+            if i % 2 == 0 {
+                peer.add_tx_announcement(TxAnnouncement::Sent);
+                assert!(node
+                    .process_scheduled_reconciliation(peer_id, current_time)
+                    .is_empty());
+            } else {
+                assert_eq!(
+                    node.process_scheduled_reconciliation(peer_id, current_time)
+                        .len(),
+                    2
+                );
+            }
+        }
     }
 
     #[test]

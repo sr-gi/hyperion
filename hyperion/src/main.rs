@@ -123,26 +123,14 @@ fn main() -> anyhow::Result<()> {
                         simulator.add_event(delayed_event);
                     }
                 }
-                Event::ProcessScheduledReconciliation(src) => {
-                    // Drop the periodic schedule if there is nothing else to be reconciled
-                    // This allow us to finish the simulation, for Erlay scenarios, by consuming
-                    // all messages in the queue
-                    let node = simulator.network.get_node(src).unwrap();
-                    if !node.knows_transaction()
-                        || !node
-                            .get_outbounds()
-                            .values()
-                            .all(|peer| peer.already_announced())
+                Event::ProcessScheduledReconciliation(src, dst) => {
+                    for event in simulator
+                        .network
+                        .get_node_mut(src)
+                        .unwrap()
+                        .process_scheduled_reconciliation(&dst, current_time)
                     {
-                        // Processing an scheduled reconciliation will return the reconciliation flow
-                        // start, plus the scheduling of the next reconciliation (with the next peer in line)
-                        let (rec_req, next_event) = simulator
-                            .network
-                            .get_node_mut(src)
-                            .unwrap()
-                            .process_scheduled_reconciliation(current_time);
-                        simulator.add_event(rec_req);
-                        simulator.add_event(next_event);
+                        simulator.add_event(event);
                     }
                 }
             }

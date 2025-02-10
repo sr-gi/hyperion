@@ -11,8 +11,6 @@ pub mod simulator;
 pub mod statistics;
 pub mod txreconciliation;
 
-mod indexedmap;
-
 pub const MAX_OUTBOUND_CONNECTIONS: usize = 8;
 static SECS_TO_NANOS: u64 = 1_000_000_000;
 
