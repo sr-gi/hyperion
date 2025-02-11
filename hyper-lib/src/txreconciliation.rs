@@ -80,8 +80,10 @@ impl TxReconciliationState {
 
     // Make delayed transactions available for reconciliation
     pub fn make_delayed_available(&mut self) {
-        self.recon_set = self.delayed_set;
-        self.delayed_set = false;
+        if self.delayed_set {
+            self.recon_set = self.delayed_set;
+            self.delayed_set = false;
+        }
     }
 
     pub fn set_reconciling(&mut self) {

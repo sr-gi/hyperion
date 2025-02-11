@@ -536,12 +536,8 @@ impl Node {
         &mut self,
         peer_id: NodeId,
         current_time: u64,
-    ) -> Option<ScheduledEvent> {
+    ) -> Vec<ScheduledEvent> {
         let peer = self.get_peer_mut(&peer_id).unwrap();
-        assert!(
-            !peer.we_announced_tx(),
-            "Trying to process a duplicated scheduled announcement"
-        );
 
         // Make transactions that could have been announced via fanout available for reconciliation. Transactions added to the
         // reconciliation set between trickles are not available until the next interval
@@ -551,13 +547,28 @@ impl Node {
                 .make_delayed_available();
         }
 
+        let mut events = Vec::new();
         // Drop the announcement if the peer has already announced the transaction
         if peer.to_be_announced() {
             // We are simulating a single transaction, so that always fits within a single INV
-            self.send_message_to(NetworkMessage::INV, peer_id, current_time)
-        } else {
-            None
+            events.push(
+                self.send_message_to(NetworkMessage::INV, peer_id, current_time)
+                    .unwrap(),
+            );
         }
+
+        // Keep the recurring trickle as long as the transaction hasn't been exchanged over all links
+        if !(self.knows_transaction()
+            && self.out_peers.values().all(|peer| peer.already_announced())
+            && self.in_peers.values().all(|peer| peer.already_announced()))
+        {
+            events.push(ScheduledEvent::new(
+                Event::process_scheduled_announcement(self.node_id, peer_id),
+                self.get_next_announcement_time(current_time, peer_id),
+            ));
+        }
+
+        events
     }
 
     /// Records the request of the simulated transaction in or tracker (assigned to a given peer). If the peer is inbounds, this will generate
@@ -1341,10 +1352,14 @@ mod test_node {
         node.connect(peer_id_fanout, true);
         node.connect(peer_id_recon, true);
 
-        // Processing a scheduled announcement with no data to be sent returns nothing
-        assert!(node
-            .process_scheduled_announcement(peer_id_fanout, current_time)
-            .is_none());
+        // Processing a scheduled announcement with no data returns only the next `ProcessScheduledAnnouncement`
+        // event, but no announcement
+        let mut events = node.process_scheduled_announcement(peer_id_fanout, current_time);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            events[0].inner,
+            Event::ProcessScheduledAnnouncement { .. }
+        ));
 
         // If the peer has data pending to be sent, an INV message containing such data will be returned.
         // Also, if the peer had some data to be reconciled, that data will be made available (moved out of the delayed set)
@@ -1373,17 +1388,23 @@ mod test_node {
             .get_delayed_set(),);
 
         // Professing the scheduled announcement returns an INV (meaning that the transaction is known and processed)
-        let inv_event = node
-            .process_scheduled_announcement(peer_id_fanout, current_time)
-            .unwrap();
-        assert!(matches!(inv_event.inner, Event::ReceiveMessageFrom(..)));
-        assert!(inv_event.inner.get_message().unwrap().is_inv());
+        events = node.process_scheduled_announcement(peer_id_fanout, current_time);
+        assert_eq!(events.len(), 2);
+        assert!(matches!(events[0].inner, Event::ReceiveMessageFrom(..)));
+        assert!(events[0].inner.get_message().unwrap().is_inv());
+        assert!(matches!(
+            events[1].inner,
+            Event::ProcessScheduledAnnouncement { .. }
+        ));
 
         // Processing the scheduled announcement for the erlay peer moves the transaction to available
         // No INV is returned in this case
-        assert!(node
-            .process_scheduled_announcement(peer_id_recon, current_time)
-            .is_none());
+        events = node.process_scheduled_announcement(peer_id_recon, current_time);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            events[0].inner,
+            Event::ProcessScheduledAnnouncement { .. }
+        ));
 
         assert!(!node
             .get_peer(&peer_id_recon)
@@ -1397,6 +1418,14 @@ mod test_node {
             .get_tx_reconciliation_state()
             .unwrap()
             .get_recon_set());
+
+        // If all peers are already aware of the transaction, `process_scheduled_announcement` returns no events
+        // We only need to do this for the Erlay peer, since we already did for the fanout one
+        node.get_peer_mut(&peer_id_recon)
+            .unwrap()
+            .add_tx_announcement(TxAnnouncement::Sent);
+        events = node.process_scheduled_announcement(peer_id_recon, current_time);
+        assert!(events.is_empty())
     }
 
     #[test]
