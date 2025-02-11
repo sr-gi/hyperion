@@ -104,13 +104,13 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
                 Event::ProcessScheduledAnnouncement(src, dst) => {
-                    if let Some(scheduled_event) = simulator
+                    for event in simulator
                         .network
                         .get_node_mut(src)
                         .unwrap()
                         .process_scheduled_announcement(dst, current_time)
                     {
-                        simulator.add_event(scheduled_event);
+                        simulator.add_event(event);
                     }
                 }
                 Event::ProcessDelayedRequest(target, peer_id) => {
