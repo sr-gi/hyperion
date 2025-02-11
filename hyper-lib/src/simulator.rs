@@ -20,10 +20,8 @@ pub enum Event {
     ProcessScheduledAnnouncement(NodeId, NodeId),
     /// A given node (0) processed a delayed request of a give transaction (1)
     ProcessDelayedRequest(NodeId, NodeId),
-    /// Processes a scheduled reconciliation on the given node
-    /// Peers are reconciled on a round robin fashion, so there is
-    /// no need to specify the target
-    ProcessScheduledReconciliation(NodeId),
+    /// Processes a scheduled reconciliation on the given node (0) with a given peer (1)
+    ProcessScheduledReconciliation(NodeId, NodeId),
 }
 
 impl Event {
@@ -39,8 +37,8 @@ impl Event {
         Event::ProcessDelayedRequest(src, dst)
     }
 
-    pub fn process_scheduled_reconciliation(src: NodeId) -> Self {
-        Event::ProcessScheduledReconciliation(src)
+    pub fn process_scheduled_reconciliation(src: NodeId, dst: NodeId) -> Self {
+        Event::ProcessScheduledReconciliation(src, dst)
     }
 
     pub fn is_receive_message(&self) -> bool {
@@ -59,7 +57,7 @@ impl Event {
             Event::ReceiveMessageFrom(a, b, _) => Some((*a, *b).into()),
             Event::ProcessScheduledAnnouncement(a, b) => Some((*a, *b).into()),
             Event::ProcessDelayedRequest(a, b) => Some((*a, *b).into()),
-            Event::ProcessScheduledReconciliation(_) => None,
+            Event::ProcessScheduledReconciliation(a, b) => Some((*a, *b).into()),
         }
     }
 }
@@ -160,12 +158,25 @@ impl Simulator {
                 // in the simulator, the whole network is build at the same (discrete) time. This does not follow
                 // reality, so we will pick a random value between the simulation start time (current_time) and
                 // RECON_REQUEST_INTERVAL as the first scheduled reconciliation for each connection.
-                let delta = self
-                    .rng
-                    .borrow_mut()
-                    .gen_range(0..RECON_REQUEST_INTERVAL * SECS_TO_NANOS);
-                self.event_queue
-                    .push(node.schedule_set_reconciliation(current_time + delta));
+                let start_time = current_time
+                    + self
+                        .rng
+                        .borrow_mut()
+                        .gen_range(0..RECON_REQUEST_INTERVAL * SECS_TO_NANOS);
+
+                // Make it so we reconcile with all peers every RECON_REQUEST_INTERVAL
+                let outbound_peers = node.get_outbounds();
+                let delta = ((RECON_REQUEST_INTERVAL as f64 / outbound_peers.len() as f64)
+                    * SECS_TO_NANOS as f64)
+                    .round() as u64;
+
+                for (i, peer_id) in outbound_peers.keys().enumerate() {
+                    // Schedule interleaved reconciliation. All outbound peers are reconciled every RECON_REQUEST_INTERVAL, with a
+                    // RECON_REQUEST_INTERVAL/N step, where N is the number of outbound peers
+                    self.event_queue.push(
+                        node.schedule_set_reconciliation(peer_id, start_time + (delta * i as u64)),
+                    );
+                }
             }
         }
     }
