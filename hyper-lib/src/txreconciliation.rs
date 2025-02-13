@@ -52,20 +52,9 @@ impl TxReconciliationState {
         }
     }
 
-    pub fn clear(&mut self, include_delayed: bool) -> bool {
-        // The transaction cannot be in both sets at the same time
-        assert!(!(self.recon_set && self.delayed_set));
-
-        let recon_set = self.recon_set;
-        self.is_reconciling = false;
-        self.recon_set = false;
-        self.sketch = None;
-
-        if include_delayed {
-            self.delayed_set = false;
-        }
-
-        recon_set
+    pub fn reset(&mut self) {
+        self.clear_reconciling();
+        self.delayed_set = false;
     }
 
     pub fn is_initiator(&self) -> bool {
@@ -84,6 +73,7 @@ impl TxReconciliationState {
     /// result in one additional INV (belonging to this transaction). This is equivalent to two INVs crossing, and AFAIK,
     /// there's nothing we can do about it
     pub fn remove_tx(&mut self) {
+        assert!(!(self.recon_set && self.delayed_set));
         self.delayed_set = false;
         self.recon_set = false;
     }
@@ -96,6 +86,16 @@ impl TxReconciliationState {
 
     pub fn set_reconciling(&mut self) {
         self.is_reconciling = true;
+    }
+
+    pub fn clear_reconciling(&mut self) {
+        // After reconciling we can safely clear the current recon_set.
+        // If they wanted the simulated transaction, the reconciliation flow should have triggered
+        // an announcement, and if they didn't want it, we don't need to offer it again
+        // The delayed set will be cleared if an announcement is received
+        self.recon_set = false;
+        self.is_reconciling = false;
+        self.sketch = None;
     }
 
     pub fn is_reconciling(&self) -> bool {
@@ -174,14 +174,15 @@ mod test {
 
         // Clear, not including delayed (they are only included when cleaning after a simulation)
         // and check that both sets are empty
-        tx_recon_state.clear(/*include_delayed=*/ false);
+        tx_recon_state.clear_reconciling();
         assert!(!tx_recon_state.recon_set);
         assert!(!tx_recon_state.delayed_set);
         assert!(!tx_recon_state.is_reconciling());
 
         // Add again, leave data in delayed and clear
         tx_recon_state.add_tx();
-        tx_recon_state.clear(/*include_delayed=*/ true);
+        tx_recon_state.clear_reconciling();
+        tx_recon_state.remove_tx();
         assert!(!tx_recon_state.recon_set);
         assert!(!tx_recon_state.delayed_set);
         assert!(!tx_recon_state.is_reconciling());
@@ -220,7 +221,8 @@ mod test {
         assert!(their_diff);
 
         // Update it so now we don't know but they do
-        tx_recon_state.clear(true);
+        tx_recon_state.clear_reconciling();
+        tx_recon_state.remove_tx();
         their_sketch = Sketch::new(true, diff_size);
         assert!(their_sketch.get_size() == diff_size);
 
