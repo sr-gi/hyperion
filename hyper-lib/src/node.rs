@@ -114,7 +114,7 @@ impl Peer {
     pub fn reset(&mut self) {
         self.tx_announcement = TxAnnouncement::None;
         if let Some(recon_state) = self.get_tx_reconciliation_state_mut() {
-            recon_state.clear(/*include_delayed=*/ true);
+            recon_state.reset();
         }
     }
 
@@ -135,7 +135,6 @@ impl Peer {
     }
 
     fn add_tx_announcement(&mut self, tx_announcement: TxAnnouncement) {
-        assert!(!self.already_announced());
         self.tx_announcement = tx_announcement;
         if let Some(recon_state) = self.get_tx_reconciliation_state_mut() {
             recon_state.remove_tx();
@@ -722,7 +721,7 @@ impl Node {
                         request_time,
                     ))
                 }
-                NetworkMessage::RECONCILDIFF(wants_tx) => {
+                NetworkMessage::RECONCILDIFF(_) => {
                     assert!(self.is_erlay, "Trying to send a reconciliation difference to peer (peer_id: {peer_id}) but we do not support Erlay");
                     assert!(peer.is_erlay(), "Trying to send a reconciliation difference to peer (peer_id: {peer_id}), but they do not support Erlay");
                     assert!(peer.get_tx_reconciliation_state().unwrap().is_reconciling(), "Trying to send a reconciliation difference to a peer that hasn't requested so (peer_id: {peer_id})");
@@ -732,7 +731,7 @@ impl Node {
                         .unwrap()
                         .get_tx_reconciliation_state_mut()
                         .unwrap()
-                        .clear(/*include_delayed=*/ wants_tx);
+                        .clear_reconciling();
                     message = Some(ScheduledEvent::new(
                         Event::receive_message_from(self.node_id, peer_id, msg),
                         request_time,
@@ -910,11 +909,14 @@ impl Node {
                         peer_mut.add_tx_announcement(TxAnnouncement::Sent)
                     }
 
+                    // If the diff computed by our peer results on us wanting the transaction, we should be cleaning the whole reconciliation state.
+                    // We don't need to do this here though, given it would be immediately triggered by the peer's announcement that should follow.
+                    // Therefore, clear only the reconciliation flag, the available set and the last sketch
                     self.get_peer_mut(&peer_id)
                         .unwrap()
                         .get_tx_reconciliation_state_mut()
                         .unwrap()
-                        .clear(/*include_delayed=*/ false);
+                        .clear_reconciling();
 
                     // Send them the transaction if they want it. We are purposely sending this straightaway
                     // instead of scheduling, given the availability of the transaction has already gone through
@@ -1305,9 +1307,11 @@ mod test_node {
         // Flag the transaction as announced over some links and check again. The flagged links should have an empty
         // return from process_scheduled_reconciliation, resulting on the loop ending for that peer
         for (i, peer_id) in outbound_peer_ids.iter().enumerate() {
-            // Flag peer and not reconciling (was set as so in the previous loop)
+            // Flag peer as not reconciling (was set as so in the previous loop)
             let peer = node.get_peer_mut(peer_id).unwrap();
-            peer.get_tx_reconciliation_state_mut().unwrap().clear(true);
+            peer.get_tx_reconciliation_state_mut()
+                .unwrap()
+                .clear_reconciling();
 
             if i % 2 == 0 {
                 peer.add_tx_announcement(TxAnnouncement::Sent);
