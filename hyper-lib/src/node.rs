@@ -832,13 +832,10 @@ impl Node {
                     }
                     let peer = self.get_peer_mut(&peer_id).unwrap();
                     assert!(!peer.get_tx_reconciliation_state().unwrap().is_reconciling(), "Received a reconciliation request from a peer we are already reconciling with (peer_id: {peer_id})");
-                    peer.get_tx_reconciliation_state_mut()
-                        .unwrap()
-                        .set_reconciling();
-                    let sketch = peer
-                        .get_tx_reconciliation_state()
-                        .unwrap()
-                        .compute_sketch(has_tx);
+                    let recon_state = peer.get_tx_reconciliation_state_mut().unwrap();
+
+                    recon_state.set_reconciling();
+                    let sketch = recon_state.compute_sketch(has_tx);
 
                     message = self
                         .send_message_to(NetworkMessage::SKETCH(sketch), peer_id, request_time)
@@ -892,7 +889,6 @@ impl Node {
                     message = events
                 }
                 NetworkMessage::RECONCILDIFF(wants_tx) => {
-                    let recon_state = peer.get_tx_reconciliation_state().unwrap();
                     assert!(self.is_erlay, "Received a reconciliation difference from peer (peer_id: {peer_id}) but we do not support Erlay");
                     assert!(peer.is_erlay(), "Received a reconciliation difference from peer (peer_id: {peer_id}) but they do not support Erlay");
                     assert!(peer.get_tx_reconciliation_state().unwrap().is_reconciling(), "Received a reconciliation difference from a peer that we haven't requested to reconcile with (peer_id: {peer_id})");
@@ -901,8 +897,15 @@ impl Node {
                         assert!(!peer.already_announced(), "Received a reconciliation difference from peer (peer_id: {peer_id}) containing a transaction they already know");
                     }
 
-                    // If they don't want the transaction, and we have the it in their set, they already know it
-                    if !wants_tx && recon_state.get_recon_set() {
+                    // If they don't want the transaction, it was part of the last sketch we sent them, and they haven't offered it yet, flagged it as known
+                    // Notice an INV could have been received in between the reconciliation flow, hence why checking if they have already announced it
+                    let was_offered = peer
+                        .get_tx_reconciliation_state()
+                        .unwrap()
+                        .get_last_sketch()
+                        .unwrap()
+                        .get_tx_set();
+                    if !wants_tx && was_offered && !peer.they_announced_tx() {
                         let peer_mut = self.get_peer_mut(&peer_id).unwrap();
                         peer_mut.add_tx_announcement(TxAnnouncement::Sent)
                     }
