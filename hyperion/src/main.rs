@@ -61,6 +61,8 @@ fn main() -> anyhow::Result<()> {
             }
         );
 
+        simulator.schedule_transaction_announcements(start_time);
+
         // For statistical purposes
         let mut nodes_reached = 1;
         let mut percentile_time = 0;
@@ -69,14 +71,11 @@ fn main() -> anyhow::Result<()> {
         // Bootstrap the set reconciliation events (if needed) and send out the transaction.
         // All simulations start at time 0 so we don't have to carry any offset when computing
         // the overall time
-        simulator.schedule_set_reconciliation(start_time);
-        for e in simulator
+        simulator
             .get_node_mut(source_node_id)
             .unwrap()
-            .broadcast_tx(start_time)
-        {
-            simulator.add_event(e);
-        }
+            .broadcast_tx(start_time);
+
         // Record the initial time as the time when the first node sends out the transaction.
         // We don't need to account for the time the source withholds it
         let first_seen_time = simulator.get_next_event_time().unwrap();
@@ -124,7 +123,7 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
                 Event::ProcessScheduledReconciliation(src, dst) => {
-                    for event in simulator
+                    if let Some(event) = simulator
                         .network
                         .get_node_mut(src)
                         .unwrap()
