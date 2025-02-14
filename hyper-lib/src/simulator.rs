@@ -14,11 +14,11 @@ use crate::SECS_TO_NANOS;
 /// An enumeration of all the events that can be created in a simulation
 #[derive(Clone, Hash, Eq, PartialEq, Debug)]
 pub enum Event {
-    /// The destination (0) receives a new message (2) from given source (1)
+    /// The destination (1) receives a new message (2) from given source (0)
     ReceiveMessageFrom(NodeId, NodeId, NetworkMessage),
     /// A given node (0) processes an scheduled announcements to a given peer (1)
     ProcessScheduledAnnouncement(NodeId, NodeId),
-    /// A given node (0) processed a delayed request of a give transaction (1)
+    /// A given node (0) processed a delayed request of the simulated transaction from a given peer (1)
     ProcessDelayedRequest(NodeId, NodeId),
     /// Processes a scheduled reconciliation on the given node (0) with a given peer (1)
     ProcessScheduledReconciliation(NodeId, NodeId),
