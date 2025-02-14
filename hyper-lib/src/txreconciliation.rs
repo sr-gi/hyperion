@@ -1,3 +1,5 @@
+use crate::node::TRICKLES_PER_RECONCILIATION;
+
 pub type ShortID = u32;
 
 /// This is a hack. A sketch is really built using Minisketch. However, this is not necessary for the simulator.
@@ -41,6 +43,8 @@ pub struct TxReconciliationState {
     delayed_set: bool,
     /// Whether this peer has a reconciliation request pending to be responded to. Applies only to initiators.
     requested_reconciliation: Option<bool>,
+    ///
+    trickle_count: u16,
 }
 
 impl TxReconciliationState {
@@ -52,6 +56,7 @@ impl TxReconciliationState {
             sketch: None,
             delayed_set: false,
             requested_reconciliation: None,
+            trickle_count: 0,
         }
     }
 
@@ -114,6 +119,24 @@ impl TxReconciliationState {
 
     pub fn get_delayed_set(&self) -> bool {
         self.delayed_set
+    }
+
+    pub fn get_trickle_count(&self) -> u16 {
+        self.trickle_count
+    }
+
+    pub fn increase_and_check_trickle_count(&mut self) -> bool {
+        if self.trickle_count == *TRICKLES_PER_RECONCILIATION - 1 {
+            self.trickle_count = 0;
+            true
+        } else {
+            self.trickle_count += 1;
+            false
+        }
+    }
+
+    pub fn reset_trickle_count(&mut self) {
+        self.trickle_count = 0;
     }
 
     pub fn compute_sketch(&mut self, they_know_tx: bool) -> Sketch {
