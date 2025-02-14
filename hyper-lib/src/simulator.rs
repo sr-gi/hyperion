@@ -8,8 +8,7 @@ use rand::rngs::StdRng;
 use rand::{rng, Rng, RngCore, SeedableRng};
 
 use crate::network::{Link, Network, NetworkMessage};
-use crate::node::{Node, NodeId, RECON_REQUEST_INTERVAL};
-use crate::SECS_TO_NANOS;
+use crate::node::{Node, NodeId};
 
 /// An enumeration of all the events that can be created in a simulation
 #[derive(Clone, Hash, Eq, PartialEq, Debug)]
@@ -150,33 +149,23 @@ impl Simulator {
         }
     }
 
-    pub fn schedule_set_reconciliation(&mut self, current_time: u64) {
-        if self.network.is_erlay() {
-            for node in self.network.get_nodes_mut() {
-                // Schedule transaction reconciliation here. As opposite to fanout, reconciliation is scheduled
-                // on a fixed interval. This means that we need to start it when the connection is made. However,
-                // in the simulator, the whole network is build at the same (discrete) time. This does not follow
-                // reality, so we will pick a random value between the simulation start time (current_time) and
-                // RECON_REQUEST_INTERVAL as the first scheduled reconciliation for each connection.
-                let start_time = current_time
-                    + self
-                        .rng
-                        .borrow_mut()
-                        .random_range(0..RECON_REQUEST_INTERVAL * SECS_TO_NANOS);
-
-                // Make it so we reconcile with all peers every RECON_REQUEST_INTERVAL
-                let outbound_peers = node.get_outbounds();
-                let delta = ((RECON_REQUEST_INTERVAL as f64 / outbound_peers.len() as f64)
-                    * SECS_TO_NANOS as f64)
-                    .round() as u64;
-
-                for (i, peer_id) in outbound_peers.keys().enumerate() {
-                    // Schedule interleaved reconciliation. All outbound peers are reconciled every RECON_REQUEST_INTERVAL, with a
-                    // RECON_REQUEST_INTERVAL/N step, where N is the number of outbound peers
-                    self.event_queue.push(
-                        node.schedule_set_reconciliation(peer_id, start_time + (delta * i as u64)),
-                    );
-                }
+    pub fn schedule_transaction_announcements(&mut self, current_time: u64) {
+        for node in self.network.get_nodes_mut().iter_mut() {
+            let peers = node
+                .get_inbounds()
+                .keys()
+                .cloned()
+                .chain(node.get_outbounds().keys().cloned())
+                .collect::<Vec<_>>();
+            for peer_id in peers {
+                let next_interval = node.get_next_announcement_time(current_time, peer_id);
+                // Schedule the announcement to go off on the next trickle for the given peer
+                // This starts the recurring announcement loop, that will conclude once the transaction
+                // has been announced over all links
+                self.event_queue.push(ScheduledEvent::new(
+                    Event::process_scheduled_announcement(node.get_id(), peer_id),
+                    next_interval,
+                ));
             }
         }
     }

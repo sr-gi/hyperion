@@ -1,3 +1,6 @@
+use crate::node::RECON_REQUEST_INTERVAL;
+use crate::SECS_TO_NANOS;
+
 pub type ShortID = u32;
 
 /// This is a hack. A sketch is really built using Minisketch. However, this is not necessary for the simulator.
@@ -41,6 +44,8 @@ pub struct TxReconciliationState {
     delayed_set: bool,
     /// Whether this peer has a reconciliation request pending to be responded to. Applies only to initiators.
     requested_reconciliation: Option<bool>,
+    /// The last time we started a reconciliation with this peer
+    last_reconciliation: u64,
 }
 
 impl TxReconciliationState {
@@ -52,6 +57,7 @@ impl TxReconciliationState {
             sketch: None,
             delayed_set: false,
             requested_reconciliation: None,
+            last_reconciliation: 0,
         }
     }
 
@@ -59,6 +65,7 @@ impl TxReconciliationState {
         self.clear_reconciling();
         self.delayed_set = false;
         self.requested_reconciliation = None;
+        self.last_reconciliation = 0;
     }
 
     pub fn is_initiator(&self) -> bool {
@@ -120,6 +127,15 @@ impl TxReconciliationState {
 
     pub fn get_delayed_set(&self) -> bool {
         self.delayed_set
+    }
+
+    pub fn should_reconcile(&mut self, current_time: u64) -> bool {
+        if current_time >= self.last_reconciliation + (RECON_REQUEST_INTERVAL * SECS_TO_NANOS) {
+            self.last_reconciliation = current_time;
+            true
+        } else {
+            false
+        }
     }
 
     pub fn compute_sketch(&mut self, they_know_tx: bool) -> Sketch {
