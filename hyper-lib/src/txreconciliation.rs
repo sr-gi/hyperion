@@ -39,6 +39,8 @@ pub struct TxReconciliationState {
     /// These is still unrequestable for privacy reasons (to prevent transaction proving), the transaction will became
     /// available once it would have been announced via fanout (on the next trickle).
     delayed_set: bool,
+    /// Whether this peer has a reconciliation request pending to be responded to. Applies only to initiators.
+    requested_reconciliation: Option<bool>,
 }
 
 impl TxReconciliationState {
@@ -49,12 +51,14 @@ impl TxReconciliationState {
             recon_set: false,
             sketch: None,
             delayed_set: false,
+            requested_reconciliation: None,
         }
     }
 
     pub fn reset(&mut self) {
         self.clear_reconciling();
         self.delayed_set = false;
+        self.requested_reconciliation = None;
     }
 
     pub fn is_initiator(&self) -> bool {
@@ -69,9 +73,7 @@ impl TxReconciliationState {
     }
 
     /// Removes the transaction from the reconciliation set. This may happen if a peer has announced the transaction that we
-    /// were planing to reconcile with them. Notice that, if this happens after creating a snapshot, the reconciliation will
-    /// result in one additional INV (belonging to this transaction). This is equivalent to two INVs crossing, and AFAIK,
-    /// there's nothing we can do about it
+    /// were planing to reconcile with them
     pub fn remove_tx(&mut self) {
         assert!(!(self.recon_set && self.delayed_set));
         self.delayed_set = false;
@@ -88,6 +90,14 @@ impl TxReconciliationState {
 
     pub fn set_reconciling(&mut self) {
         self.is_reconciling = true;
+    }
+
+    pub fn add_reconciliation_request(&mut self, reqrecon: bool) {
+        self.requested_reconciliation = Some(reqrecon)
+    }
+
+    pub fn remove_reconciliation_request(&mut self) -> Option<bool> {
+        self.requested_reconciliation.take()
     }
 
     pub fn clear_reconciling(&mut self) {

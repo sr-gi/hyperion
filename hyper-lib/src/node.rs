@@ -537,19 +537,41 @@ impl Node {
         peer_id: NodeId,
         current_time: u64,
     ) -> Vec<ScheduledEvent> {
-        let peer = self.get_peer_mut(&peer_id).unwrap();
+        let mut events = Vec::new();
 
-        // Make transactions that could have been announced via fanout available for reconciliation. Transactions added to the
-        // reconciliation set between trickles are not available until the next interval
-        if peer.is_erlay() {
-            peer.get_tx_reconciliation_state_mut()
+        if self.get_peer(&peer_id).unwrap().is_erlay() {
+            // Make transactions that could have been announced via fanout available for reconciliation. Transactions added to the
+            // reconciliation set between trickles are not available until the next interval
+            self.get_peer_mut(&peer_id)
+                .unwrap()
+                .get_tx_reconciliation_state_mut()
                 .unwrap()
                 .make_delayed_available();
+
+            // Reply to pending requests by this peer
+            let requested_reconciliation = self
+                .get_peer_mut(&peer_id)
+                .unwrap()
+                .get_tx_reconciliation_state_mut()
+                .unwrap()
+                .remove_reconciliation_request();
+            if self.is_peer_inbounds(&peer_id) && requested_reconciliation.is_some() {
+                let they_know_tx = requested_reconciliation.unwrap();
+                let sketch = self
+                    .get_peer_mut(&peer_id)
+                    .unwrap()
+                    .get_tx_reconciliation_state_mut()
+                    .unwrap()
+                    .compute_sketch(they_know_tx);
+                events.push(
+                    self.send_message_to(NetworkMessage::SKETCH(sketch), peer_id, current_time)
+                        .unwrap(),
+                );
+            }
         }
 
-        let mut events = Vec::new();
         // Drop the announcement if the peer has already announced the transaction
-        if peer.to_be_announced() {
+        if self.get_peer(&peer_id).unwrap().to_be_announced() {
             // We are simulating a single transaction, so that always fits within a single INV
             events.push(
                 self.send_message_to(NetworkMessage::INV, peer_id, current_time)
@@ -709,6 +731,7 @@ impl Node {
                         assert!(!peer.they_announced_tx(), "Trying to reconcile a transaction with a peer that has already announced it to us (peer_id: {peer_id})");
                     }
                     assert!(!peer.get_tx_reconciliation_state().unwrap().is_reconciling(), "Trying to send a reconciliation request to a peer we are already reconciling with (peer_id: {peer_id})");
+                    assert!(!peer.get_tx_reconciliation_state().unwrap().is_initiator(), "Trying to send a reconciliation request to an inbound peer (peer_id: {peer_id})");
                     self.get_peer_mut(&peer_id)
                         .unwrap()
                         .get_tx_reconciliation_state_mut()
@@ -841,15 +864,13 @@ impl Node {
                         assert!(!peer.they_announced_tx(), "Received a reconciliation request from peer (peer_id: {peer_id}) but they have already announced the transaction");
                     }
                     let peer = self.get_peer_mut(&peer_id).unwrap();
-                    assert!(!peer.get_tx_reconciliation_state().unwrap().is_reconciling(), "Received a reconciliation request from a peer we are already reconciling with (peer_id: {peer_id})");
                     let recon_state = peer.get_tx_reconciliation_state_mut().unwrap();
-
+                    assert!(!recon_state.is_reconciling(), "Received a reconciliation request from a peer we are already reconciling with (peer_id: {peer_id})");
+                    assert!(recon_state.is_initiator(), "Received a reconciliation request from an outbound peer (peer_id: {peer_id})");
                     recon_state.set_reconciling();
-                    let sketch = recon_state.compute_sketch(has_tx);
+                    recon_state.add_reconciliation_request(has_tx);
 
-                    message = self
-                        .send_message_to(NetworkMessage::SKETCH(sketch), peer_id, request_time)
-                        .map_or(Vec::new(), |x| vec![x])
+                    message = Vec::new();
                 }
                 NetworkMessage::SKETCH(sketch) => {
                     assert!(self.is_erlay, "Received a reconciliation sketch from peer (peer_id: {peer_id}) but we do not support Erlay");
