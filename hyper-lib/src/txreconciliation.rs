@@ -33,6 +33,8 @@ pub struct TxReconciliationState {
     is_reconciling: bool,
     /// Whether the simulated transaction is in the reconciliation set
     recon_set: bool,
+    /// The last Sketch we sent our peer if reconciling
+    sketch: Option<Sketch>,
     /// Whether the simulated transaction is in pending to be added to the reconciliation set the next trickle.
     /// These is still unrequestable for privacy reasons (to prevent transaction proving), the transaction will became
     /// available once it would have been announced via fanout (on the next trickle).
@@ -45,6 +47,7 @@ impl TxReconciliationState {
             is_initiator,
             is_reconciling: false,
             recon_set: false,
+            sketch: None,
             delayed_set: false,
         }
     }
@@ -56,6 +59,7 @@ impl TxReconciliationState {
         let recon_set = self.recon_set;
         self.is_reconciling = false;
         self.recon_set = false;
+        self.sketch = None;
 
         if include_delayed {
             self.delayed_set = false;
@@ -106,7 +110,7 @@ impl TxReconciliationState {
         self.delayed_set
     }
 
-    pub fn compute_sketch(&self, they_know_tx: bool) -> Sketch {
+    pub fn compute_sketch(&mut self, they_know_tx: bool) -> Sketch {
         // q cannot be easily predicted in a short simulation, however it is needed to size the sketch properly.
         // As a workaround, the sketches exchanges by the simulator are not really sketches, but knowledge of whether
         // the sender knows the given transaction. q can be scaled down if needed to mimic scenarios where the sketch
@@ -116,7 +120,14 @@ impl TxReconciliationState {
         // We can compute the size of the diff as int(A XOR B)
         // TODO: Scale q if required so the predicted difference is not always 100% accurate
         let q = (local_set ^ remote_set) as usize;
-        Sketch::new(local_set, q)
+        let sketch = Sketch::new(local_set, q);
+        self.sketch = Some(sketch.clone());
+
+        sketch
+    }
+
+    pub fn get_last_sketch(&self) -> &Option<Sketch> {
+        &self.sketch
     }
 
     pub fn compute_sketch_diff(&self, sketch: Sketch) -> (bool, bool) {
