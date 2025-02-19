@@ -174,7 +174,7 @@ impl Network {
             unreachable_count
         );
 
-        let peers_die = Uniform::from(0..reachable_nodes.len());
+        let peers_die = Uniform::new(0, reachable_nodes.len()).unwrap();
         let mut borrowed_rng = rng.borrow_mut();
 
         log::info!(

@@ -5,7 +5,7 @@ use std::hash::Hash;
 use std::rc::Rc;
 
 use rand::rngs::StdRng;
-use rand::{thread_rng, Rng, RngCore, SeedableRng};
+use rand::{rng, Rng, RngCore, SeedableRng};
 
 use crate::network::{Link, Network, NetworkMessage};
 use crate::node::{Node, NodeId, RECON_REQUEST_INTERVAL};
@@ -125,13 +125,13 @@ impl Simulator {
         if let Some(s) = seed {
             log::info!("Using user provided rng seed: {}", s);
         } else {
-            *seed = Some(thread_rng().next_u64());
+            *seed = Some(rng().next_u64());
             log::info!("Using fresh rng seed: {}", seed.unwrap());
         };
         let rng = Rc::new(RefCell::new(StdRng::seed_from_u64(seed.unwrap())));
         let random_node_id = rng
             .borrow_mut()
-            .gen_range(0..reachable_count + unreachable_count);
+            .random_range(0..reachable_count + unreachable_count);
 
         let network = Network::new(
             reachable_count,
@@ -162,7 +162,7 @@ impl Simulator {
                     + self
                         .rng
                         .borrow_mut()
-                        .gen_range(0..RECON_REQUEST_INTERVAL * SECS_TO_NANOS);
+                        .random_range(0..RECON_REQUEST_INTERVAL * SECS_TO_NANOS);
 
                 // Make it so we reconcile with all peers every RECON_REQUEST_INTERVAL
                 let outbound_peers = node.get_outbounds();
@@ -216,7 +216,7 @@ impl Simulator {
         self.cached_node_id = self
             .rng
             .borrow_mut()
-            .gen_range(0..self.network.get_node_count());
+            .random_range(0..self.network.get_node_count());
         random_node_id
     }
 
