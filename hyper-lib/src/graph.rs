@@ -1,5 +1,6 @@
 use std::fmt::Display;
 use std::hash::Hash;
+use std::sync::Arc;
 
 use graphrs::{Error, Graph, GraphSpecs};
 
@@ -13,7 +14,7 @@ pub fn build_grap(
         .concat()
         .iter()
         .map(|node| graphrs::Node::from_name(node.get_id()))
-        .collect::<Vec<graphrs::Node<NodeId, ()>>>();
+        .collect::<Vec<Arc<graphrs::Node<NodeId, ()>>>>();
 
     let mut edges = Vec::new();
     for node in reachable_nodes.iter() {
@@ -35,5 +36,5 @@ where
     T: Eq + Clone + PartialOrd + Ord + Hash + Send + Sync + Display,
     A: Clone,
 {
-    graphrs::readwrite::graphml::write_graphml(&graph, filename)
+    graphrs::readwrite::graphml::write_graphml_file(&graph, filename)
 }
