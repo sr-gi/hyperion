@@ -16,7 +16,7 @@ pub enum Event {
     /// The destination (1) receives a new message (2) from given source (0)
     ReceiveMessageFrom(NodeId, NodeId, NetworkMessage),
     /// A given node (0) processes an scheduled announcements to a given peer (1)
-    ProcessScheduledAnnouncement(NodeId, NodeId),
+    ProcessScheduledAnnouncement(NodeId, Option<NodeId>),
     /// A given node (0) processed a delayed request of the simulated transaction from a given peer (1)
     ProcessDelayedRequest(NodeId, NodeId),
     /// Processes a scheduled reconciliation on the given node (0) with a given peer (1)
@@ -28,7 +28,7 @@ impl Event {
         Event::ReceiveMessageFrom(src, dst, msg)
     }
 
-    pub fn process_scheduled_announcement(src: NodeId, dst: NodeId) -> Self {
+    pub fn process_scheduled_announcement(src: NodeId, dst: Option<NodeId>) -> Self {
         Event::ProcessScheduledAnnouncement(src, dst)
     }
 
@@ -54,7 +54,13 @@ impl Event {
     pub fn get_link(&self) -> Option<Link> {
         match self {
             Event::ReceiveMessageFrom(a, b, _) => Some((*a, *b).into()),
-            Event::ProcessScheduledAnnouncement(a, b) => Some((*a, *b).into()),
+            Event::ProcessScheduledAnnouncement(a, b) => {
+                if b.is_some() {
+                    Some((*a, b.unwrap()).into())
+                } else {
+                    None
+                }
+            }
             Event::ProcessDelayedRequest(a, b) => Some((*a, *b).into()),
             Event::ProcessScheduledReconciliation(a, b) => Some((*a, *b).into()),
         }
@@ -151,22 +157,23 @@ impl Simulator {
 
     pub fn schedule_transaction_announcements(&mut self, current_time: u64) {
         for node in self.network.get_nodes_mut().iter_mut() {
-            let peers = node
-                .get_inbounds()
-                .keys()
-                .cloned()
-                .chain(node.get_outbounds().keys().cloned())
-                .collect::<Vec<_>>();
-            for peer_id in peers {
-                let next_interval = node.get_next_announcement_time(current_time, peer_id);
+            let out_peers = node.get_outbounds().keys().cloned().collect::<Vec<_>>();
+            for peer_id in out_peers {
+                let next_interval: u64 = node.get_next_announcement_time(current_time, false);
                 // Schedule the announcement to go off on the next trickle for the given peer
                 // This starts the recurring announcement loop, that will conclude once the transaction
                 // has been announced over all links
                 self.event_queue.push(ScheduledEvent::new(
-                    Event::process_scheduled_announcement(node.get_id(), peer_id),
+                    Event::process_scheduled_announcement(node.get_id(), Some(peer_id)),
                     next_interval,
                 ));
             }
+
+            // Schedule a single event for inbounds
+            self.event_queue.push(ScheduledEvent::new(
+                Event::process_scheduled_announcement(node.get_id(), None),
+                node.get_next_announcement_time(current_time, true),
+            ));
         }
     }
 
