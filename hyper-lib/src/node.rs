@@ -1080,7 +1080,7 @@ mod test_node {
 
     #[test]
     fn test_get_next_announcement_time() {
-        let rng = Rc::new(RefCell::new(StdRng::from_entropy()));
+        let rng = Rc::new(RefCell::new(StdRng::from_os_rng()));
         let node_id = 0;
         let mut node = Node::new(node_id, rng, true, true);
         let outbound_peer_ids = 1..10;
@@ -1125,7 +1125,7 @@ mod test_node {
 
     #[test]
     fn test_connections() {
-        let rng = Rc::new(RefCell::new(StdRng::from_entropy()));
+        let rng = Rc::new(RefCell::new(StdRng::from_os_rng()));
         let node_id = 0;
         let mut node = Node::new(node_id, rng, true, true);
         let outbound_peer_ids = 1..10;
@@ -1144,7 +1144,7 @@ mod test_node {
 
     #[test]
     fn test_schedule_tx_announcement_no_erlay() {
-        let rng = Rc::new(RefCell::new(StdRng::from_entropy()));
+        let rng = Rc::new(RefCell::new(StdRng::from_os_rng()));
         let node_id = 0;
         let mut node = Node::new(node_id, rng, true, true);
 
@@ -1169,7 +1169,7 @@ mod test_node {
 
     #[test]
     fn test_schedule_tx_announcement_erlay() {
-        let rng = Rc::new(RefCell::new(StdRng::from_entropy()));
+        let rng = Rc::new(RefCell::new(StdRng::from_os_rng()));
         let node_id = 0;
         let mut node = Node::new(node_id, rng, true, true);
         let mut fanout_count = 0;
@@ -1223,7 +1223,7 @@ mod test_node {
 
     #[test]
     fn test_broadcast_tx() {
-        let rng = Rc::new(RefCell::new(StdRng::from_entropy()));
+        let rng = Rc::new(RefCell::new(StdRng::from_os_rng()));
         let node_id = 0;
         let mut node = Node::new(node_id, rng, true, true);
         let outbound_peer_ids = Vec::from_iter(1..11);
@@ -1254,7 +1254,7 @@ mod test_node {
 
     #[test]
     fn test_process_scheduled_reconciliation() {
-        let rng = Rc::new(RefCell::new(StdRng::from_entropy()));
+        let rng = Rc::new(RefCell::new(StdRng::from_os_rng()));
         let node_id = 0;
         let mut node = Node::new(node_id, rng, true, true);
         let outbound_peer_ids = Vec::from_iter(1..11);
@@ -1323,7 +1323,7 @@ mod test_node {
 
     #[test]
     fn test_process_scheduled_announcement() {
-        let rng = Rc::new(RefCell::new(StdRng::from_entropy()));
+        let rng = Rc::new(RefCell::new(StdRng::from_os_rng()));
         let node_id = 0;
         let mut node = Node::new(node_id, rng, true, true);
         let current_time = 0;
@@ -1394,7 +1394,7 @@ mod test_node {
 
     #[test]
     fn test_add_request() {
-        let rng = Rc::new(RefCell::new(StdRng::from_entropy()));
+        let rng = Rc::new(RefCell::new(StdRng::from_os_rng()));
         let node_id = 0;
         let mut node = Node::new(node_id, rng, true, true);
         let current_time = 0;
@@ -1434,7 +1434,7 @@ mod test_node {
 
     #[test]
     fn test_process_delayed_request() {
-        let rng = Rc::new(RefCell::new(StdRng::from_entropy()));
+        let rng = Rc::new(RefCell::new(StdRng::from_os_rng()));
         let node_id = 0;
         let mut node = Node::new(node_id, rng, true, true);
         let current_time = 0;
