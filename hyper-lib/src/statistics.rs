@@ -211,6 +211,10 @@ impl NodeStatistics {
     pub fn get_tx_received_from_outbounds(&self) -> u64 {
         self.tx.from_outbounds
     }
+
+    pub fn get_invs_received(&self) -> u64 {
+        self.inv.from_outbounds + self.inv.from_inbounds
+    }
 }
 
 impl Default for NodeStatistics {
