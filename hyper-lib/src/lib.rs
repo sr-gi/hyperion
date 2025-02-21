@@ -73,7 +73,7 @@ pub struct OutputResult {
     unreachable_count: usize,
     in_poisson_mean: u16,
     out_poisson_mean: u16,
-    out_fanout: usize,
+    out_fanout: u64,
     in_fanout: f32,
     n: u32,
     erlay: bool,

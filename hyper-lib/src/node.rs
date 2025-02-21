@@ -4,7 +4,6 @@ use std::env;
 use std::rc::Rc;
 
 use once_cell::sync::Lazy;
-use rand::prelude::IteratorRandom;
 use rand::rngs::StdRng;
 use rand_distr::{Distribution, Exp};
 
@@ -29,11 +28,17 @@ pub(crate) static OUTBOUND_INVENTORY_BROADCAST_INTERVAL: Lazy<u64> = Lazy::new(|
         .unwrap_or(2)
 });
 
-pub(crate) static OUTBOUND_FANOUT_DESTINATIONS: Lazy<usize> = Lazy::new(|| {
+pub(crate) static OUTBOUND_FANOUT_DESTINATIONS: Lazy<u64> = Lazy::new(|| {
     env::var("OUTBOUND_FANOUT_DESTINATIONS")
         .ok()
-        .and_then(|val| val.parse::<usize>().ok())
+        .and_then(|val| val.parse::<u64>().ok())
         .unwrap_or(1)
+});
+pub(crate) static OUTBOUND_FANOUT_THRESHOLD: Lazy<u64> = Lazy::new(|| {
+    env::var("OUTBOUND_FANOUT_THRESHOLD")
+        .ok()
+        .and_then(|val| val.parse::<u64>().ok())
+        .unwrap_or(4)
 });
 pub(crate) static INBOUND_FANOUT_DESTINATIONS_FRACTION: Lazy<f64> = Lazy::new(|| {
     env::var("INBOUND_FANOUT_DESTINATIONS_FRACTION")
@@ -136,6 +141,10 @@ impl Peer {
 
     fn add_tx_announcement(&mut self, tx_announcement: TxAnnouncement) {
         self.tx_announcement = tx_announcement;
+    }
+
+    fn add_tx_announcement_and_clear(&mut self, tx_announcement: TxAnnouncement) {
+        self.add_tx_announcement(tx_announcement);
         if let Some(recon_state) = self.get_tx_reconciliation_state_mut() {
             recon_state.remove_tx();
         }
@@ -194,6 +203,12 @@ pub struct Node {
     outbounds_poisson_timer: PoissonTimer,
     /// Amount of messages of each time the node has sent/received
     node_statistics: NodeStatistics,
+    /// Number of outbound peers we have fanout to
+    out_fanout_count: u64,
+    /// Number of inbound peers we have fanout to
+    in_fanout_count: u32,
+    /// Number INVs (from distinct peers) we have received about the simulated transaction
+    received_invs: u64,
 }
 
 impl Node {
@@ -216,6 +231,9 @@ impl Node {
             inbounds_poisson_timer: PoissonTimer::new(*INBOUND_INVENTORY_BROADCAST_INTERVAL),
             outbounds_poisson_timer: PoissonTimer::new(*OUTBOUND_INVENTORY_BROADCAST_INTERVAL),
             node_statistics: NodeStatistics::new(),
+            out_fanout_count: 0,
+            in_fanout_count: 0,
+            received_invs: 0,
         }
     }
 
@@ -227,6 +245,10 @@ impl Node {
         self.requested_transaction = false;
         self.delayed_request = None;
         self.known_transaction = false;
+
+        self.out_fanout_count = 0;
+        self.in_fanout_count = 0;
+        self.received_invs = 0;
 
         for in_peer in self.get_inbounds_mut().values_mut() {
             in_peer.reset();
@@ -362,88 +384,18 @@ impl Node {
         &self.node_statistics
     }
 
-    /// Get the collection of peers selected to fanout the simulated transaction
-    fn get_fanout_targets(&self) -> Vec<NodeId> {
-        // Shortcut if we are not Erlay.
-        // In theory, we would need to return the whole vector of peers, but this won't be used for non-erlay sims,
-        // should_fanout_to would return true without checking the vector, so we can speed this up by just returning an empty vector
-        if !self.is_erlay {
-            return Vec::new();
-        }
-
-        let mut borrowed_rng = self.rng.borrow_mut();
-        let inbound_target_count = (self.get_inbounds().len() as f64
-            * *INBOUND_FANOUT_DESTINATIONS_FRACTION)
-            .round() as usize;
-
-        // In the real Bitcoin code, we perform a fancy ordering of the peers based on the transaction id that we want to send and the
-        // peer_ids in our neighbourhood to obtain a deterministically random sorting from where we can pick our fanout peers.
-        // In the simulator, we can make this way simpler, we only care about the ordering being deterministically random, and different
-        // for multiples runs of the same simulation. This can be achieved by simply randomly sorting our peers using our pre-seeded rng.
-        let mut targets = self
-            .out_peers
-            .keys()
-            .copied()
-            .choose_multiple(&mut *borrowed_rng, *OUTBOUND_FANOUT_DESTINATIONS);
-
-        targets.extend(
-            self.in_peers
-                .keys()
-                .copied()
-                .choose_multiple(&mut *borrowed_rng, inbound_target_count),
-        );
-
-        targets
-    }
-
-    /// Whether we should fanout the given transaction to the given peer.
-    /// Assume that Erlay support is a boolean flag for all nodes in the simulation
-    /// for now, so there are no fanout_tx_relay peers if Erlay is supported
-    fn should_fanout_to(&self, peer_id: &NodeId, fanout_targets: &[NodeId]) -> bool {
-        let peer = self.get_peer(peer_id).unwrap();
-        if !peer.is_erlay() {
-            return true;
-        }
-
-        fanout_targets.contains(peer_id)
-    }
-
     /// Decide how this transaction is going to be relayed and place it on the relevant data structures so it can be
     /// sent out on the next scheduled fanout or reconciliation
     fn relay_tx(&mut self, current_time: u64) {
-        // Collecting since we need to use them in the following loop, which also accesses self mutably
-        let peers = self
-            .in_peers
-            .keys()
-            .chain(self.out_peers.keys())
-            .copied()
-            .collect::<Vec<_>>();
-        let fanout_targets = self.get_fanout_targets();
-
-        for peer_id in peers {
+        for (peer_id, peer) in self.in_peers.iter_mut().chain(self.out_peers.iter_mut()) {
             // Skip the announcement if it has already been processed over this link (either sent or received)
-            if !self.get_peer(&peer_id).unwrap().already_announced() {
-                if self.should_fanout_to(&peer_id, &fanout_targets) {
-                    self.get_peer_mut(&peer_id)
-                        .unwrap()
-                        .schedule_tx_announcement();
-                    debug_log!(
-                        current_time,
-                        self.node_id,
-                        "Added tx to the next announcement for peer (peer_id: {peer_id})"
-                    );
-                } else {
-                    // If this peer have been picked for set reconciliation, we can assume the tx_reconciliation_state is set
-                    debug_log!(
-                        current_time,
-                        self.node_id,
-                        "Added tx to reconciliation set for peer (peer_id: {peer_id})"
-                    );
-                    assert!(
-                        self.get_peer_mut(&peer_id).unwrap().add_tx_to_reconcile(),
-                        "Couldn't add tx to reconset (peer_id: {peer_id})",
-                    );
-                }
+            if !peer.already_announced() {
+                peer.schedule_tx_announcement();
+                debug_log!(
+                    current_time,
+                    self.node_id,
+                    "Added tx to the next announcement for peer (peer_id: {peer_id})"
+                );
             }
         }
     }
@@ -541,6 +493,47 @@ impl Node {
         current_time: u64,
     ) -> Vec<ScheduledEvent> {
         let mut events = Vec::new();
+
+        let peer = self.get_peer(&peer_id).unwrap();
+        if peer.is_erlay() {
+            let to_be_announced = peer.to_be_announced();
+            let already_announced = peer.already_announced();
+            // Make sure the originator doesn't pick more fanout targets than the rest (for fingerprinting reasons)
+            let threshold = if self.received_invs == 0 {
+                *OUTBOUND_FANOUT_THRESHOLD - 1
+            } else {
+                *OUTBOUND_FANOUT_THRESHOLD
+            };
+            if to_be_announced {
+                // Decide whether to reconcile or fanout based on how many INVS we have received
+                // Make sure we pick at least one outbound for fanout
+                let should_fanout = self.received_invs + self.out_fanout_count <= threshold
+                    || self.out_fanout_count < 1;
+
+                if should_fanout {
+                    // This leaves the peer as fanout. An INV will be sent to it at the end of the method
+                    self.out_fanout_count += 1;
+                } else {
+                    // Reconcile with this peer
+                    let peer_mut = self.get_peer_mut(&peer_id).unwrap();
+                    peer_mut.add_tx_announcement(TxAnnouncement::None);
+                    assert!(peer_mut.add_tx_to_reconcile());
+                }
+            }
+            if !(already_announced) {
+                // Increase trickle count and request reconciliation if we should
+                if self
+                    .get_peer_mut(&peer_id)
+                    .unwrap()
+                    .get_tx_reconciliation_state_mut()
+                    .unwrap()
+                    .should_reconcile(current_time)
+                {
+                    events.push(self.schedule_set_reconciliation(&peer_id, current_time));
+                }
+            }
+        }
+
         // Send the announcement only it is still pending
         if self.get_peer(&peer_id).unwrap().to_be_announced() {
             // We are simulating a single transaction, so that always fits within a single INV
@@ -548,27 +541,6 @@ impl Node {
                 self.send_message_to(NetworkMessage::INV, peer_id, current_time)
                     .unwrap(),
             );
-        }
-
-        let peer = self.get_peer(&peer_id).unwrap();
-        if peer.is_erlay() {
-            let we_know_tx = self.known_transaction;
-            let already_announced = peer.already_announced();
-            // Make transactions that could have been announced via fanout available for reconciliation. Transactions added to the
-            // reconciliation set between trickles are not available until the next interval
-            let recon_state = self
-                .get_peer_mut(&peer_id)
-                .unwrap()
-                .get_tx_reconciliation_state_mut()
-                .unwrap();
-            recon_state.make_delayed_available();
-
-            if !(we_know_tx && already_announced) {
-                // Increase trickle count and request reconciliation if we should
-                if recon_state.should_reconcile(current_time) {
-                    events.push(self.schedule_set_reconciliation(&peer_id, current_time));
-                }
-            }
         }
 
         events
@@ -582,25 +554,27 @@ impl Node {
         let mut to_be_announced = vec![];
         let mut pending_sketches = vec![];
 
-        // Send out INVS for those links where the transaction is scheduled
-        for (peer_id, peer) in self.get_inbounds().iter() {
-            if peer.to_be_announced() {
-                to_be_announced.push(*peer_id);
-            }
-        }
-        for peer_id in to_be_announced {
-            events.push(
-                self.send_message_to(NetworkMessage::INV, peer_id, current_time)
-                    .unwrap(),
-            );
-        }
-
         if self.is_erlay {
-            for (peer_id, peer) in self.get_inbounds_mut().iter_mut() {
-                // Ready delayed transactions and reply to pending reconciliation requests for inbounds peers
-                let recon_state = peer.get_tx_reconciliation_state_mut().unwrap();
-                recon_state.make_delayed_available();
+            let inbound_target_count = (self.get_inbounds().len() as f64
+                * *INBOUND_FANOUT_DESTINATIONS_FRACTION)
+                .round() as u32;
+            let mut in_fanout_count = self.in_fanout_count;
 
+            for (peer_id, peer) in self.get_inbounds_mut().iter_mut() {
+                // Announce only if the announcement is pending
+                if peer.to_be_announced() {
+                    // Fanout up to the target rate, reconcile with the rest
+                    if in_fanout_count < inbound_target_count {
+                        to_be_announced.push(*peer_id);
+                        in_fanout_count += 1;
+                    } else {
+                        // Reconcile with this peer
+                        peer.add_tx_announcement(TxAnnouncement::None);
+                        assert!(peer.add_tx_to_reconcile());
+                    }
+                }
+                // Reply to the pending reconciliation requests
+                let recon_state = peer.get_tx_reconciliation_state_mut().unwrap();
                 if let Some(requested_reconciliation) = recon_state.remove_reconciliation_request()
                 {
                     pending_sketches.push((
@@ -609,12 +583,28 @@ impl Node {
                     ));
                 }
             }
+
             for (peer_id, sketch) in pending_sketches {
                 events.push(
                     self.send_message_to(NetworkMessage::SKETCH(sketch), peer_id, current_time)
                         .unwrap(),
                 );
             }
+            self.in_fanout_count = in_fanout_count;
+        } else {
+            // Send out INVS for those links where the transaction is scheduled
+            for (peer_id, peer) in self.get_inbounds().iter() {
+                if peer.to_be_announced() {
+                    to_be_announced.push(*peer_id);
+                }
+            }
+        }
+
+        for peer_id in to_be_announced {
+            events.push(
+                self.send_message_to(NetworkMessage::INV, peer_id, current_time)
+                    .unwrap(),
+            );
         }
 
         events
@@ -723,7 +713,7 @@ impl Node {
 
                     self.get_peer_mut(&peer_id)
                         .unwrap()
-                        .add_tx_announcement(TxAnnouncement::Sent);
+                        .add_tx_announcement_and_clear(TxAnnouncement::Sent);
 
                     message = Some(ScheduledEvent::new(
                         Event::receive_message_from(self.node_id, peer_id, msg),
@@ -849,9 +839,10 @@ impl Node {
                             !peer.they_announced_tx(),
                             "Received a duplicate announcement from a peer (peer_id: {peer_id})"
                         );
+                        self.received_invs += 1;
                         self.get_peer_mut(&peer_id)
                             .unwrap()
-                            .add_tx_announcement(TxAnnouncement::Received);
+                            .add_tx_announcement_and_clear(TxAnnouncement::Received);
                         // We only request transactions that we don't know about
                         if self.knows_transaction() {
                             debug_log!(request_time, self.node_id, "Already known transaction");

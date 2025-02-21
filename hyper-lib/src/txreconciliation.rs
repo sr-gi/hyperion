@@ -38,10 +38,6 @@ pub struct TxReconciliationState {
     recon_set: bool,
     /// The last Sketch we sent our peer if reconciling
     sketch: Option<Sketch>,
-    /// Whether the simulated transaction is in pending to be added to the reconciliation set the next trickle.
-    /// These is still unrequestable for privacy reasons (to prevent transaction proving), the transaction will became
-    /// available once it would have been announced via fanout (on the next trickle).
-    delayed_set: bool,
     /// Whether this peer has a reconciliation request pending to be responded to. Applies only to initiators.
     requested_reconciliation: Option<bool>,
     /// The last time we started a reconciliation with this peer
@@ -55,7 +51,6 @@ impl TxReconciliationState {
             is_reconciling: false,
             recon_set: false,
             sketch: None,
-            delayed_set: false,
             requested_reconciliation: None,
             last_reconciliation: 0,
         }
@@ -63,7 +58,6 @@ impl TxReconciliationState {
 
     pub fn reset(&mut self) {
         self.clear_reconciling();
-        self.delayed_set = false;
         self.requested_reconciliation = None;
         self.last_reconciliation = 0;
     }
@@ -73,8 +67,8 @@ impl TxReconciliationState {
     }
 
     pub fn add_tx(&mut self) -> bool {
-        let r = !self.delayed_set;
-        self.delayed_set = true;
+        let r = !self.recon_set;
+        self.recon_set = true;
 
         r
     }
@@ -82,17 +76,7 @@ impl TxReconciliationState {
     /// Removes the transaction from the reconciliation set. This may happen if a peer has announced the transaction that we
     /// were planing to reconcile with them
     pub fn remove_tx(&mut self) {
-        assert!(!(self.recon_set && self.delayed_set));
-        self.delayed_set = false;
         self.recon_set = false;
-    }
-
-    // Make delayed transactions available for reconciliation
-    pub fn make_delayed_available(&mut self) {
-        if self.delayed_set {
-            self.recon_set = self.delayed_set;
-            self.delayed_set = false;
-        }
     }
 
     pub fn set_reconciling(&mut self) {
@@ -123,10 +107,6 @@ impl TxReconciliationState {
 
     pub fn get_recon_set(&self) -> bool {
         self.recon_set
-    }
-
-    pub fn get_delayed_set(&self) -> bool {
-        self.delayed_set
     }
 
     pub fn should_reconcile(&mut self, current_time: u64) -> bool {
