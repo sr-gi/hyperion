@@ -74,7 +74,7 @@ fn main() -> anyhow::Result<()> {
         simulator
             .get_node_mut(source_node_id)
             .unwrap()
-            .broadcast_tx(start_time);
+            .broadcast_tx(start_time, false);
 
         // Record the initial time as the time when the first node sends out the transaction.
         // We don't need to account for the time the source withholds it
