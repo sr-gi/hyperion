@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::rc::Rc;
 
@@ -175,6 +175,37 @@ impl Peer {
     }
 }
 
+#[derive(Clone)]
+struct ReconciliationTracker {
+    invs_from_recon: HashSet<NodeId>,
+    tx_via_recon: bool,
+}
+
+impl ReconciliationTracker {
+    fn new() -> Self {
+        ReconciliationTracker {
+            invs_from_recon: HashSet::new(),
+            tx_via_recon: false,
+        }
+    }
+
+    fn track_received_inv(&mut self, peer_id: NodeId) {
+        self.invs_from_recon.insert(peer_id);
+    }
+
+    fn was_announced_by(&self, peer_id: &NodeId) -> bool {
+        self.invs_from_recon.contains(peer_id)
+    }
+
+    fn flag_as_received(&mut self) {
+        self.tx_via_recon = true;
+    }
+
+    fn was_received_via_recon(&self) -> bool {
+        self.tx_via_recon
+    }
+}
+
 /// A node is the main unit of the simulator. It represents an abstractions of a Bitcoin node and
 /// stores all the data required to simulate sending and receiving the simulated transaction
 #[derive(Clone)]
@@ -207,8 +238,10 @@ pub struct Node {
     out_fanout_count: u64,
     /// Number of inbound peers we have fanout to
     in_fanout_count: u32,
-    /// Number INVs (from distinct peers) we have received about the simulated transaction
-    received_invs: u64,
+    /// Number INVs from distinct peers (outbounds, inbounds) we have received about the simulated transaction
+    received_invs: (u64, u64),
+    /// Keeps track received announcements and transactions from reconciliation
+    recon_tracker: Option<ReconciliationTracker>,
 }
 
 impl Node {
@@ -231,9 +264,14 @@ impl Node {
             inbounds_poisson_timer: PoissonTimer::new(*INBOUND_INVENTORY_BROADCAST_INTERVAL),
             outbounds_poisson_timer: PoissonTimer::new(*OUTBOUND_INVENTORY_BROADCAST_INTERVAL),
             node_statistics: NodeStatistics::new(),
+            recon_tracker: if is_erlay {
+                Some(ReconciliationTracker::new())
+            } else {
+                None
+            },
             out_fanout_count: 0,
             in_fanout_count: 0,
-            received_invs: 0,
+            received_invs: (0, 0),
         }
     }
 
@@ -245,10 +283,13 @@ impl Node {
         self.requested_transaction = false;
         self.delayed_request = None;
         self.known_transaction = false;
+        if self.is_erlay {
+            self.recon_tracker = Some(ReconciliationTracker::new());
+        }
 
         self.out_fanout_count = 0;
         self.in_fanout_count = 0;
-        self.received_invs = 0;
+        self.received_invs = (0, 0);
 
         for in_peer in self.get_inbounds_mut().values_mut() {
             in_peer.reset();
@@ -499,25 +540,33 @@ impl Node {
             let to_be_announced = peer.to_be_announced();
             let already_announced = peer.already_announced();
             // Make sure the originator doesn't pick more fanout targets than the rest (for fingerprinting reasons)
-            let threshold = if self.received_invs == 0 {
+            let threshold = if self.received_invs == (0, 0) {
                 *OUTBOUND_FANOUT_THRESHOLD - 1
             } else {
                 *OUTBOUND_FANOUT_THRESHOLD
             };
             if to_be_announced {
-                // Decide whether to reconcile or fanout based on how many INVS we have received
-                // Make sure we pick at least one outbound for fanout
-                let should_fanout = self.received_invs + self.out_fanout_count <= threshold
+                // Decide whether to reconcile or fanout based on how many INVs from outbound peers we have received
+                // We purposely ignore INVs from inbounds so an attacker cannot simply connect to us, send us some announcements
+                // and influence the amount of fanout we do.
+                // Make sure we pick at least one outbound peer for fanout
+                let should_fanout = self.received_invs.0 + self.out_fanout_count <= threshold
                     || self.out_fanout_count < 1;
 
-                if should_fanout {
-                    // This leaves the peer as fanout. An INV will be sent to it at the end of the method
-                    self.out_fanout_count += 1;
-                } else {
+                if self
+                    .recon_tracker
+                    .as_ref()
+                    .unwrap()
+                    .was_received_via_recon()
+                    || !should_fanout
+                {
                     // Reconcile with this peer
                     let peer_mut = self.get_peer_mut(&peer_id).unwrap();
                     peer_mut.add_tx_announcement(TxAnnouncement::None);
                     assert!(peer_mut.add_tx_to_reconcile());
+                } else {
+                    // This leaves the peer as fanout. An INV will be sent to it at the end of the method
+                    self.out_fanout_count += 1;
                 }
             }
             if !(already_announced) {
@@ -839,7 +888,11 @@ impl Node {
                             !peer.they_announced_tx(),
                             "Received a duplicate announcement from a peer (peer_id: {peer_id})"
                         );
-                        self.received_invs += 1;
+                        if !self.is_peer_inbounds(&peer_id) {
+                            self.received_invs.0 += 1;
+                        } else {
+                            self.received_invs.1 += 1;
+                        }
                         self.get_peer_mut(&peer_id)
                             .unwrap()
                             .add_tx_announcement_and_clear(TxAnnouncement::Received);
@@ -873,6 +926,14 @@ impl Node {
                     assert!(!self.knows_transaction(), "Received the transaction from a peer (peer_id: {peer_id}), but we already knew about it");
                     assert!(peer.they_announced_tx(), "Received a transaction from a peer without an announcement (peer_id {peer_id})");
                     self.broadcast_tx(request_time);
+
+                    // Flag as received via reconciliation if the source announced it via reconciliation
+                    if let Some(recon_tracker) = self.recon_tracker.as_mut() {
+                        if recon_tracker.was_announced_by(&peer_id) {
+                            recon_tracker.flag_as_received();
+                        }
+                    }
+
                     message = Vec::new();
                 }
                 NetworkMessage::REQRECON(has_tx) => {
@@ -916,6 +977,14 @@ impl Node {
                         self.get_peer_mut(&peer_id)
                             .unwrap()
                             .add_tx_announcement(TxAnnouncement::Received);
+                    }
+
+                    // Flag as announced via reconciliation if we request it
+                    if request_tx {
+                        self.recon_tracker
+                            .as_mut()
+                            .unwrap()
+                            .track_received_inv(peer_id);
                     }
 
                     // Send a RECONCILDIFF signaling whether we want the transaction or not, and an INV corresponding to the transaction if they are missing it
