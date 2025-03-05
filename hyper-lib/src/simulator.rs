@@ -8,17 +8,16 @@ use rand::rngs::StdRng;
 use rand::{rng, Rng, RngCore, SeedableRng};
 
 use crate::network::{Link, Network, NetworkMessage};
-use crate::node::{Node, NodeId, RECON_REQUEST_INTERVAL};
-use crate::SECS_TO_NANOS;
+use crate::node::{Node, NodeId};
 
 /// An enumeration of all the events that can be created in a simulation
 #[derive(Clone, Hash, Eq, PartialEq, Debug)]
 pub enum Event {
-    /// The destination (0) receives a new message (2) from given source (1)
+    /// The destination (1) receives a new message (2) from given source (0)
     ReceiveMessageFrom(NodeId, NodeId, NetworkMessage),
     /// A given node (0) processes an scheduled announcements to a given peer (1)
-    ProcessScheduledAnnouncement(NodeId, NodeId),
-    /// A given node (0) processed a delayed request of a give transaction (1)
+    ProcessScheduledAnnouncement(NodeId, Option<NodeId>),
+    /// A given node (0) processed a delayed request of the simulated transaction from a given peer (1)
     ProcessDelayedRequest(NodeId, NodeId),
     /// Processes a scheduled reconciliation on the given node (0) with a given peer (1)
     ProcessScheduledReconciliation(NodeId, NodeId),
@@ -29,7 +28,7 @@ impl Event {
         Event::ReceiveMessageFrom(src, dst, msg)
     }
 
-    pub fn process_scheduled_announcement(src: NodeId, dst: NodeId) -> Self {
+    pub fn process_scheduled_announcement(src: NodeId, dst: Option<NodeId>) -> Self {
         Event::ProcessScheduledAnnouncement(src, dst)
     }
 
@@ -55,7 +54,13 @@ impl Event {
     pub fn get_link(&self) -> Option<Link> {
         match self {
             Event::ReceiveMessageFrom(a, b, _) => Some((*a, *b).into()),
-            Event::ProcessScheduledAnnouncement(a, b) => Some((*a, *b).into()),
+            Event::ProcessScheduledAnnouncement(a, b) => {
+                if b.is_some() {
+                    Some((*a, b.unwrap()).into())
+                } else {
+                    None
+                }
+            }
             Event::ProcessDelayedRequest(a, b) => Some((*a, *b).into()),
             Event::ProcessScheduledReconciliation(a, b) => Some((*a, *b).into()),
         }
@@ -150,34 +155,25 @@ impl Simulator {
         }
     }
 
-    pub fn schedule_set_reconciliation(&mut self, current_time: u64) {
-        if self.network.is_erlay() {
-            for node in self.network.get_nodes_mut() {
-                // Schedule transaction reconciliation here. As opposite to fanout, reconciliation is scheduled
-                // on a fixed interval. This means that we need to start it when the connection is made. However,
-                // in the simulator, the whole network is build at the same (discrete) time. This does not follow
-                // reality, so we will pick a random value between the simulation start time (current_time) and
-                // RECON_REQUEST_INTERVAL as the first scheduled reconciliation for each connection.
-                let start_time = current_time
-                    + self
-                        .rng
-                        .borrow_mut()
-                        .random_range(0..RECON_REQUEST_INTERVAL * SECS_TO_NANOS);
-
-                // Make it so we reconcile with all peers every RECON_REQUEST_INTERVAL
-                let outbound_peers = node.get_outbounds();
-                let delta = ((RECON_REQUEST_INTERVAL as f64 / outbound_peers.len() as f64)
-                    * SECS_TO_NANOS as f64)
-                    .round() as u64;
-
-                for (i, peer_id) in outbound_peers.keys().enumerate() {
-                    // Schedule interleaved reconciliation. All outbound peers are reconciled every RECON_REQUEST_INTERVAL, with a
-                    // RECON_REQUEST_INTERVAL/N step, where N is the number of outbound peers
-                    self.event_queue.push(
-                        node.schedule_set_reconciliation(peer_id, start_time + (delta * i as u64)),
-                    );
-                }
+    pub fn schedule_transaction_announcements(&mut self, current_time: u64) {
+        for node in self.network.get_nodes_mut().iter_mut() {
+            let out_peers = node.get_outbounds().keys().cloned().collect::<Vec<_>>();
+            for peer_id in out_peers {
+                let next_interval: u64 = node.get_next_announcement_time(current_time, false);
+                // Schedule the announcement to go off on the next trickle for the given peer
+                // This starts the recurring announcement loop, that will conclude once the transaction
+                // has been announced over all links
+                self.event_queue.push(ScheduledEvent::new(
+                    Event::process_scheduled_announcement(node.get_id(), Some(peer_id)),
+                    next_interval,
+                ));
             }
+
+            // Schedule a single event for inbounds
+            self.event_queue.push(ScheduledEvent::new(
+                Event::process_scheduled_announcement(node.get_id(), None),
+                node.get_next_announcement_time(current_time, true),
+            ));
         }
     }
 

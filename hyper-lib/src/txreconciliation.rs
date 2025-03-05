@@ -1,3 +1,6 @@
+use crate::node::RECON_REQUEST_INTERVAL;
+use crate::SECS_TO_NANOS;
+
 pub type ShortID = u32;
 
 /// This is a hack. A sketch is really built using Minisketch. However, this is not necessary for the simulator.
@@ -33,10 +36,12 @@ pub struct TxReconciliationState {
     is_reconciling: bool,
     /// Whether the simulated transaction is in the reconciliation set
     recon_set: bool,
-    /// Whether the simulated transaction is in pending to be added to the reconciliation set the next trickle.
-    /// These is still unrequestable for privacy reasons (to prevent transaction proving), the transaction will became
-    /// available once it would have been announced via fanout (on the next trickle).
-    delayed_set: bool,
+    /// The last Sketch we sent our peer if reconciling
+    sketch: Option<Sketch>,
+    /// Whether this peer has a reconciliation request pending to be responded to. Applies only to initiators.
+    requested_reconciliation: Option<bool>,
+    /// The last time we started a reconciliation with this peer
+    last_reconciliation: u64,
 }
 
 impl TxReconciliationState {
@@ -45,23 +50,16 @@ impl TxReconciliationState {
             is_initiator,
             is_reconciling: false,
             recon_set: false,
-            delayed_set: false,
+            sketch: None,
+            requested_reconciliation: None,
+            last_reconciliation: 0,
         }
     }
 
-    pub fn clear(&mut self, include_delayed: bool) -> bool {
-        // The transaction cannot be in both sets at the same time
-        assert!(!(self.recon_set && self.delayed_set));
-
-        let recon_set = self.recon_set;
-        self.is_reconciling = false;
-        self.recon_set = false;
-
-        if include_delayed {
-            self.delayed_set = false;
-        }
-
-        recon_set
+    pub fn reset(&mut self) {
+        self.clear_reconciling();
+        self.requested_reconciliation = None;
+        self.last_reconciliation = 0;
     }
 
     pub fn is_initiator(&self) -> bool {
@@ -69,29 +67,38 @@ impl TxReconciliationState {
     }
 
     pub fn add_tx(&mut self) -> bool {
-        let r = !self.delayed_set;
-        self.delayed_set = true;
+        let r = !self.recon_set;
+        self.recon_set = true;
 
         r
     }
 
     /// Removes the transaction from the reconciliation set. This may happen if a peer has announced the transaction that we
-    /// were planing to reconcile with them. Notice that, if this happens after creating a snapshot, the reconciliation will
-    /// result in one additional INV (belonging to this transaction). This is equivalent to two INVs crossing, and AFAIK,
-    /// there's nothing we can do about it
+    /// were planing to reconcile with them
     pub fn remove_tx(&mut self) {
-        self.delayed_set = false;
         self.recon_set = false;
-    }
-
-    // Make delayed transactions available for reconciliation
-    pub fn make_delayed_available(&mut self) {
-        self.recon_set = self.delayed_set;
-        self.delayed_set = false;
     }
 
     pub fn set_reconciling(&mut self) {
         self.is_reconciling = true;
+    }
+
+    pub fn add_reconciliation_request(&mut self, reqrecon: bool) {
+        self.requested_reconciliation = Some(reqrecon)
+    }
+
+    pub fn remove_reconciliation_request(&mut self) -> Option<bool> {
+        self.requested_reconciliation.take()
+    }
+
+    pub fn clear_reconciling(&mut self) {
+        // After reconciling we can safely clear the current recon_set.
+        // If they wanted the simulated transaction, the reconciliation flow should have triggered
+        // an announcement, and if they didn't want it, we don't need to offer it again
+        // The delayed set will be cleared if an announcement is received
+        self.recon_set = false;
+        self.is_reconciling = false;
+        self.sketch = None;
     }
 
     pub fn is_reconciling(&self) -> bool {
@@ -102,11 +109,16 @@ impl TxReconciliationState {
         self.recon_set
     }
 
-    pub fn get_delayed_set(&self) -> bool {
-        self.delayed_set
+    pub fn should_reconcile(&mut self, current_time: u64) -> bool {
+        if current_time >= self.last_reconciliation + (RECON_REQUEST_INTERVAL * SECS_TO_NANOS) {
+            self.last_reconciliation = current_time;
+            true
+        } else {
+            false
+        }
     }
 
-    pub fn compute_sketch(&self, they_know_tx: bool) -> Sketch {
+    pub fn compute_sketch(&mut self, they_know_tx: bool) -> Sketch {
         // q cannot be easily predicted in a short simulation, however it is needed to size the sketch properly.
         // As a workaround, the sketches exchanges by the simulator are not really sketches, but knowledge of whether
         // the sender knows the given transaction. q can be scaled down if needed to mimic scenarios where the sketch
@@ -116,7 +128,14 @@ impl TxReconciliationState {
         // We can compute the size of the diff as int(A XOR B)
         // TODO: Scale q if required so the predicted difference is not always 100% accurate
         let q = (local_set ^ remote_set) as usize;
-        Sketch::new(local_set, q)
+        let sketch = Sketch::new(local_set, q);
+        self.sketch = Some(sketch);
+
+        sketch
+    }
+
+    pub fn get_last_sketch(&self) -> &Option<Sketch> {
+        &self.sketch
     }
 
     pub fn compute_sketch_diff(&self, sketch: Sketch) -> (bool, bool) {
@@ -144,39 +163,18 @@ mod test {
         tx_recon_state.set_reconciling();
         assert!(tx_recon_state.is_reconciling());
         assert!(!tx_recon_state.recon_set);
-        assert!(!tx_recon_state.delayed_set);
 
         // Add a transaction to the recon_set
         tx_recon_state.add_tx();
 
-        // Check that the transaction has been added to the delayed
-        // set, but the recon set remains empty
-        assert!(!tx_recon_state.recon_set);
-        assert!(tx_recon_state.delayed_set);
-        assert!(tx_recon_state.is_reconciling());
-
-        // Move to available and check again
-        tx_recon_state.make_delayed_available();
+        // Check that the transaction has been added to the recon set
         assert!(tx_recon_state.recon_set);
-        assert!(!tx_recon_state.delayed_set);
         assert!(tx_recon_state.is_reconciling());
 
-        // Clear, not including delayed (they are only included when cleaning after a simulation)
-        // and check that both sets are empty
-        tx_recon_state.clear(/*include_delayed=*/ false);
+        // Clear and check that the set is empty
+        tx_recon_state.clear_reconciling();
         assert!(!tx_recon_state.recon_set);
-        assert!(!tx_recon_state.delayed_set);
         assert!(!tx_recon_state.is_reconciling());
-
-        // Add again, leave data in delayed and clear
-        tx_recon_state.add_tx();
-        tx_recon_state.clear(/*include_delayed=*/ true);
-        assert!(!tx_recon_state.recon_set);
-        assert!(!tx_recon_state.delayed_set);
-        assert!(!tx_recon_state.is_reconciling());
-
-        // If data is held in recon_set, delayed_set must be empty
-        // so not testing that case
     }
 
     #[test]
@@ -196,7 +194,6 @@ mod test {
 
         // Add the tx to the recon set
         tx_recon_state.add_tx();
-        tx_recon_state.make_delayed_available();
 
         // Change their sketch, since now the difference will be 1
         diff_size = 1;
@@ -209,7 +206,8 @@ mod test {
         assert!(their_diff);
 
         // Update it so now we don't know but they do
-        tx_recon_state.clear(true);
+        tx_recon_state.clear_reconciling();
+        tx_recon_state.remove_tx();
         their_sketch = Sketch::new(true, diff_size);
         assert!(their_sketch.get_size() == diff_size);
 
@@ -221,7 +219,6 @@ mod test {
         // Update it so both of us know the transaction
         diff_size = 0;
         tx_recon_state.add_tx();
-        tx_recon_state.make_delayed_available();
         their_sketch = Sketch::new(true, diff_size);
 
         // Compute the diffs and check. We both know the transaction, so both diff should be false
