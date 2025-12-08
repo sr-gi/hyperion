@@ -94,14 +94,13 @@ fn main() -> anyhow::Result<()> {
                             propagation_time = current_time - first_seen_time;
                         }
                     }
-                    for future_event in simulator
+
+                    let future_events = simulator
                         .network
                         .get_node_mut(dst)
                         .unwrap()
-                        .receive_message_from(msg, src, current_time)
-                    {
-                        simulator.add_event(future_event);
-                    }
+                        .receive_message_from(msg, src, current_time);
+                    simulator.add_events(future_events);
                 }
                 Event::ProcessScheduledAnnouncement(src, dst) => {
                     if let Some(scheduled_event) = simulator
@@ -124,14 +123,12 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
                 Event::ProcessScheduledReconciliation(src, dst) => {
-                    for event in simulator
+                    let future_events = simulator
                         .network
                         .get_node_mut(src)
                         .unwrap()
-                        .process_scheduled_reconciliation(&dst, current_time)
-                    {
-                        simulator.add_event(event);
-                    }
+                        .process_scheduled_reconciliation(&dst, current_time);
+                    simulator.add_events(future_events);
                 }
             }
         }

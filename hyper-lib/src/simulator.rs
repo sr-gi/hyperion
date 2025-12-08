@@ -192,6 +192,12 @@ impl Simulator {
         self.event_queue.push(scheduled_event);
     }
 
+    pub fn add_events(&mut self, scheduled_events: Vec<ScheduledEvent>) {
+        for scheduled_event in scheduled_events {
+            self.add_event(scheduled_event);
+        }
+    }
+
     /// Get the next event to be processed, as in the one with the smallest discrete time
     pub fn get_next_event(&mut self) -> Option<ScheduledEvent> {
         self.event_queue.pop()
