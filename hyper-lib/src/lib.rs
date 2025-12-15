@@ -117,7 +117,7 @@ impl OutputResult {
             unreachable_bytes_volume: (avg_bytes.sent_unreachable()
                 + avg_bytes.received_unreachable())
                 / n_float,
-            out_fanout: *crate::node::OUTBOUND_FANOUT_DESTINATIONS,
+            out_fanout: *crate::node::OUTBOUND_FANOUT_THRESHOLD,
             in_fanout: (*crate::node::INBOUND_FANOUT_DESTINATIONS_FRACTION) as f32,
             in_poisson_mean: *crate::node::INBOUND_INVENTORY_BROADCAST_INTERVAL as u16,
             out_poisson_mean: *crate::node::OUTBOUND_INVENTORY_BROADCAST_INTERVAL as u16,

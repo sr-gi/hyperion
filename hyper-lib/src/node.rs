@@ -29,11 +29,11 @@ pub(crate) static OUTBOUND_INVENTORY_BROADCAST_INTERVAL: Lazy<u64> = Lazy::new(|
         .unwrap_or(2)
 });
 
-pub(crate) static OUTBOUND_FANOUT_DESTINATIONS: Lazy<usize> = Lazy::new(|| {
-    env::var("OUTBOUND_FANOUT_DESTINATIONS")
+pub(crate) static OUTBOUND_FANOUT_THRESHOLD: Lazy<usize> = Lazy::new(|| {
+    env::var("OUTBOUND_FANOUT_THRESHOLD")
         .ok()
         .and_then(|val| val.parse::<usize>().ok())
-        .unwrap_or(1)
+        .unwrap_or(4)
 });
 pub(crate) static INBOUND_FANOUT_DESTINATIONS_FRACTION: Lazy<f64> = Lazy::new(|| {
     env::var("INBOUND_FANOUT_DESTINATIONS_FRACTION")
@@ -386,7 +386,7 @@ impl Node {
             .out_peers
             .keys()
             .copied()
-            .choose_multiple(&mut *borrowed_rng, *OUTBOUND_FANOUT_DESTINATIONS);
+            .choose_multiple(&mut *borrowed_rng, *OUTBOUND_FANOUT_THRESHOLD);
 
         targets.extend(
             self.in_peers
@@ -1217,8 +1217,8 @@ mod test_node {
         }
 
         // With 10 outbound peers, one should be picked as fanout, and the rest as set recon
-        assert_eq!(fanout_count, *OUTBOUND_FANOUT_DESTINATIONS);
-        assert_eq!(reconciliation_count, 10 - *OUTBOUND_FANOUT_DESTINATIONS);
+        assert_eq!(fanout_count, *OUTBOUND_FANOUT_THRESHOLD);
+        assert_eq!(reconciliation_count, 10 - *OUTBOUND_FANOUT_THRESHOLD);
     }
 
     #[test]
