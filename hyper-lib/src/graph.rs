@@ -17,14 +17,9 @@ pub fn build_grap(
         .collect::<Vec<Arc<graphrs::Node<NodeId, ()>>>>();
 
     let mut edges = Vec::new();
-    for node in reachable_nodes.iter() {
-        for out_peer_id in node.get_outbounds().keys() {
-            edges.push(graphrs::Edge::new(node.get_id(), *out_peer_id))
-        }
-    }
-    for node in unreachable_nodes.iter() {
-        for out_peer_id in node.get_outbounds().keys() {
-            edges.push(graphrs::Edge::new(node.get_id(), *out_peer_id))
+    for node in reachable_nodes.iter().chain(unreachable_nodes.iter()) {
+        for out_peer_id in node.get_outbound_peer_ids() {
+            edges.push(graphrs::Edge::new(node.get_id(), out_peer_id))
         }
     }
 

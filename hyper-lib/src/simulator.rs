@@ -157,12 +157,12 @@ impl Simulator {
                         .random_range(0..RECON_REQUEST_INTERVAL * SECS_TO_NANOS);
 
                 // Make it so we reconcile with all peers every RECON_REQUEST_INTERVAL
-                let outbound_peers = node.get_outbounds();
+                let outbound_peers = node.get_outbound_peer_ids();
                 let delta = ((RECON_REQUEST_INTERVAL as f64 / outbound_peers.len() as f64)
                     * SECS_TO_NANOS as f64)
                     .round() as u64;
 
-                for (i, peer_id) in outbound_peers.keys().enumerate() {
+                for (i, peer_id) in outbound_peers.iter().enumerate() {
                     // Schedule interleaved reconciliation. All outbound peers are reconciled every RECON_REQUEST_INTERVAL, with a
                     // RECON_REQUEST_INTERVAL/N step, where N is the number of outbound peers
                     self.event_queue.push(

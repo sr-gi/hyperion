@@ -136,7 +136,7 @@ fn main() -> anyhow::Result<()> {
         // Make sure every node has received the transaction
         for node in simulator.network.get_nodes() {
             assert!(node.knows_transaction());
-            for peer in node.get_outbounds().values() {
+            for peer in node.get_outbound_peers() {
                 assert!(peer.already_announced())
             }
         }
