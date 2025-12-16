@@ -282,11 +282,9 @@ impl Network {
     ) -> Vec<Link> {
         let mut links = Vec::new();
         for node_id in 0..reachable_nodes.len() {
-            let mut already_connected_to = reachable_nodes[node_id]
-                .get_inbounds()
-                .keys()
-                .cloned()
-                .collect::<HashSet<_>>();
+            let mut already_connected_to =
+                HashSet::from_iter(reachable_nodes[node_id].get_inbound_peer_ids());
+
             already_connected_to.insert(node_id);
 
             for _ in 0..outbounds_count {

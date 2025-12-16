@@ -4,8 +4,8 @@ use std::env;
 use std::rc::Rc;
 
 use once_cell::sync::Lazy;
-use rand::prelude::IteratorRandom;
 use rand::rngs::StdRng;
+use rand::seq::IndexedRandom;
 use rand_distr::{Distribution, Exp};
 
 use crate::network::NetworkMessage;
@@ -89,6 +89,8 @@ enum TxAnnouncement {
 /// A minimal abstraction of a peer
 #[derive(Clone)]
 pub struct Peer {
+    /// Whether this peer started the connection, or we did
+    is_inbounds: bool,
     /// Whether the simulated transaction has been announced to/by this peer
     tx_announcement: TxAnnouncement,
     /// Transaction reconciliation related data for peers that support Erlay
@@ -96,15 +98,16 @@ pub struct Peer {
 }
 
 impl Peer {
-    fn new(is_erlay: bool, is_inbound: bool) -> Self {
+    fn new(is_erlay: bool, is_inbounds: bool) -> Self {
         let tx_reconciliation_state = if is_erlay {
             // Connection initiators match reconciliation initiators
             // https://github.com/bitcoin/bips/blob/master/bip-0330.mediawiki#sendtxrcncl
-            Some(TxReconciliationState::new(is_inbound))
+            Some(TxReconciliationState::new(is_inbounds))
         } else {
             None
         };
         Self {
+            is_inbounds,
             tx_announcement: TxAnnouncement::None,
             tx_reconciliation_state,
         }
@@ -151,6 +154,10 @@ impl Peer {
         self.tx_reconciliation_state.is_some()
     }
 
+    fn is_inbounds(&self) -> bool {
+        self.is_inbounds
+    }
+
     fn add_tx_to_reconcile(&mut self) -> bool {
         self.tx_reconciliation_state
             .as_mut()
@@ -179,10 +186,8 @@ pub struct Node {
     is_reachable: bool,
     /// Whether the node supports Erlay or not
     is_erlay: bool,
-    /// Map of inbound peers identified by their (global) node identifier
-    in_peers: BTreeMap<NodeId, Peer>,
-    /// Map of outbound peers identified by their (global) node identifier
-    out_peers: BTreeMap<NodeId, Peer>,
+    /// Map of peers identified by their (global) node identifier
+    peers: BTreeMap<NodeId, Peer>,
     /// Whether the transaction has been requested (but not yet received)
     requested_transaction: bool,
     /// Whether a request for the simulated transaction has been delayed (see [Node::add_request])
@@ -209,8 +214,7 @@ impl Node {
             rng,
             is_reachable,
             is_erlay,
-            in_peers: BTreeMap::new(),
-            out_peers: BTreeMap::new(),
+            peers: BTreeMap::new(),
             requested_transaction: false,
             delayed_request: None,
             known_transaction: false,
@@ -229,12 +233,8 @@ impl Node {
         self.delayed_request = None;
         self.known_transaction = false;
 
-        for in_peer in self.get_inbounds_mut().values_mut() {
-            in_peer.reset();
-        }
-
-        for out_peer in self.get_outbounds_mut().values_mut() {
-            out_peer.reset();
+        for peer in self.peers.values_mut() {
+            peer.reset();
         }
     }
 
@@ -242,16 +242,15 @@ impl Node {
     /// For outbound peers, the method always returns a new sample.
     /// For inbound peers, a new sample is computed only after the previous time has been reached, since
     /// they are on a shared timer. Otherwise, the old sample will be returned.
-    pub fn get_next_announcement_time(&mut self, current_time: u64, peer_id: NodeId) -> u64 {
-        let is_inbound = self.is_peer_inbounds(&peer_id);
-        let poisson_timer = if is_inbound {
+    pub fn get_next_announcement_time(&mut self, current_time: u64, is_inbounds: bool) -> u64 {
+        let poisson_timer = if is_inbounds {
             &mut self.inbounds_poisson_timer
         } else {
             &mut self.outbounds_poisson_timer
         };
 
         // Outbounds and inbounds that have reached the previous interval do sample
-        if !is_inbound || current_time >= poisson_timer.next_interval {
+        if !is_inbounds || current_time >= poisson_timer.next_interval {
             poisson_timer.next_interval =
                 current_time + poisson_timer.sample(&mut self.rng.borrow_mut());
         }
@@ -259,40 +258,47 @@ impl Node {
     }
 
     fn get_peer(&self, peer_id: &NodeId) -> Option<&Peer> {
-        self.out_peers
-            .get(peer_id)
-            .or_else(|| self.in_peers.get(peer_id))
+        self.peers.get(peer_id)
     }
 
     fn get_peer_mut(&mut self, peer_id: &NodeId) -> Option<&mut Peer> {
-        self.out_peers
-            .get_mut(peer_id)
-            .or_else(|| self.in_peers.get_mut(peer_id))
+        self.peers.get_mut(peer_id)
     }
 
     pub fn get_id(&self) -> NodeId {
         self.node_id
     }
 
-    pub fn get_inbounds(&self) -> &BTreeMap<NodeId, Peer> {
-        &self.in_peers
+    pub fn get_inbound_peer_ids(&self) -> Vec<NodeId> {
+        self.peers
+            .iter()
+            .filter(|(_, peer)| peer.is_inbounds())
+            .map(|(peer_id, _)| *peer_id)
+            .collect()
     }
 
-    pub fn get_inbounds_mut(&mut self) -> &mut BTreeMap<NodeId, Peer> {
-        &mut self.in_peers
+    pub fn get_outbound_peer_ids(&self) -> Vec<NodeId> {
+        self.peers
+            .iter()
+            .filter(|(_, peer)| !peer.is_inbounds())
+            .map(|(peer_id, _)| *peer_id)
+            .collect()
     }
 
-    pub fn get_outbounds(&self) -> &BTreeMap<NodeId, Peer> {
-        &self.out_peers
+    pub fn get_inbound_peers(&self) -> Vec<&Peer> {
+        self.peers
+            .iter()
+            .filter(|(_, peer)| peer.is_inbounds())
+            .map(|(_, peer)| peer)
+            .collect()
     }
 
-    pub fn get_outbounds_mut(&mut self) -> &mut BTreeMap<NodeId, Peer> {
-        &mut self.out_peers
-    }
-
-    /// Check whether a given peer is an inbound connection
-    fn is_peer_inbounds(&self, peer_id: &NodeId) -> bool {
-        self.in_peers.contains_key(peer_id)
+    pub fn get_outbound_peers(&self) -> Vec<&Peer> {
+        self.peers
+            .iter()
+            .filter(|(_, peer)| !peer.is_inbounds())
+            .map(|(_, peer)| peer)
+            .collect()
     }
 
     /// Connects to a given peer. This method is used by the simulator to connect nodes between them
@@ -301,16 +307,16 @@ impl Node {
         if is_erlay {
             assert!(self.is_erlay, "We are trying to stablish an Erlay connection with node {peer_id}, but we don't support Erlay");
         }
+
+        let already_connected = self
+            .peers
+            .insert(peer_id, Peer::new(is_erlay, /*is_inbounds=*/ false));
         assert!(
-            !self.in_peers.contains_key(&peer_id),
-            "Peer {peer_id} is already connected to us"
-        );
-        assert!(
-            self.out_peers
-                .insert(peer_id, Peer::new(is_erlay, false))
-                .is_none(),
-            "We ({}) are already connected to {peer_id}",
-            self.node_id
+            already_connected.is_none(),
+            "We ({}) are already connected to (peer_id: {}, is_inbounds: {})",
+            self.node_id,
+            peer_id,
+            already_connected.unwrap().is_inbounds()
         );
     }
 
@@ -325,17 +331,16 @@ impl Node {
             "Node {peer_id} tried to connect to us (node_id: {}), but we are not reachable",
             self.node_id
         );
+
+        let already_connected = self
+            .peers
+            .insert(peer_id, Peer::new(is_erlay, /*is_inbounds=*/ true));
         assert!(
-            !self.out_peers.contains_key(&peer_id),
-            "We (node_id: {}) are already connected to peer {peer_id}",
-            self.node_id
-        );
-        assert!(
-            self.in_peers
-                // Inbounds are all on the same shared timer
-                .insert(peer_id, Peer::new(is_erlay, true))
-                .is_none(),
-            "Peer {peer_id} is already connected to us"
+            already_connected.is_none(),
+            "We ({}) are already connected to (peer_id: {}, is_inbounds: {})",
+            self.node_id,
+            peer_id,
+            already_connected.unwrap().is_inbounds()
         );
     }
 
@@ -374,7 +379,7 @@ impl Node {
         }
 
         let mut borrowed_rng = self.rng.borrow_mut();
-        let inbound_target_count = (self.get_inbounds().len() as f64
+        let inbound_target_count = (self.get_inbound_peer_ids().len() as f64
             * *INBOUND_FANOUT_DESTINATIONS_FRACTION)
             .round() as usize;
 
@@ -383,15 +388,13 @@ impl Node {
         // In the simulator, we can make this way simpler, we only care about the ordering being deterministically random, and different
         // for multiples runs of the same simulation. This can be achieved by simply randomly sorting our peers using our pre-seeded rng.
         let mut targets = self
-            .out_peers
-            .keys()
+            .get_outbound_peer_ids()
+            .choose_multiple(&mut *borrowed_rng, *OUTBOUND_FANOUT_THRESHOLD)
             .copied()
-            .choose_multiple(&mut *borrowed_rng, *OUTBOUND_FANOUT_THRESHOLD);
+            .collect::<Vec<_>>();
 
         targets.extend(
-            self.in_peers
-                .keys()
-                .copied()
+            self.get_inbound_peer_ids()
                 .choose_multiple(&mut *borrowed_rng, inbound_target_count),
         );
 
@@ -415,53 +418,54 @@ impl Node {
     /// sampling until we have something to send to our peers. Otherwise we would create useless events just for sampling.
     /// Notice this works since a Poisson process is memoryless hence past events do not affect future ones.
     fn schedule_tx_announcement(&mut self, current_time: u64) -> Vec<ScheduledEvent> {
-        let mut events = Vec::new();
-
         // Collecting since we need to use them in the following loop, which also accesses self mutably
-        let peers = self
-            .in_peers
-            .keys()
-            .chain(self.out_peers.keys())
-            .copied()
-            .collect::<Vec<_>>();
+        let peer_ids = self.peers.keys().copied().collect::<Vec<_>>();
         let fanout_targets = self.get_fanout_targets();
 
-        for peer_id in peers {
-            // Skip the announcement if it has already been processed over this link (either sent or received)
-            if !self.get_peer(&peer_id).unwrap().already_announced() {
-                if self.should_fanout_to(&peer_id, &fanout_targets) {
-                    self.get_peer_mut(&peer_id)
-                        .unwrap()
-                        .schedule_tx_announcement();
+        peer_ids
+            .into_iter()
+            .filter_map(|peer_id| {
+                let fanout = self.should_fanout_to(&peer_id, &fanout_targets);
+                let node_id = self.node_id;
+                let peer = self.get_peer_mut(&peer_id).unwrap();
+
+                // Skip if already announced
+                if peer.already_announced() {
+                    return None;
+                }
+
+                if fanout {
+                    peer.schedule_tx_announcement();
                 } else {
                     // If this peer have been picked for set reconciliation, we can assume the tx_reconciliation_state is set
                     debug_log!(
                         current_time,
-                        self.node_id,
+                        node_id,
                         "Added tx to reconciliation set for peer (peer_id: {peer_id})"
                     );
                     assert!(
-                        self.get_peer_mut(&peer_id).unwrap().add_tx_to_reconcile(),
+                        peer.add_tx_to_reconcile(),
                         "Couldn't add tx to reconset (peer_id: {peer_id})",
                     );
                 }
-            }
 
-            let next_interval = self.get_next_announcement_time(current_time, peer_id);
-            debug_log!(
-                current_time,
-                self.node_id,
-                "Scheduling inv to peer {peer_id} for time {next_interval}"
-            );
-            // Schedule the announcement to go off on the next trickle for the given peer
-            // Notice reconciliation requests are not on a poisson timer, they are triggered every fix interval.
-            // However, transactions are made available to reconcile following the peer's poisson timer
-            events.push(ScheduledEvent::new(
-                Event::process_scheduled_announcement(self.node_id, peer_id),
-                next_interval,
-            ));
-        }
-        events
+                let is_inbounds = peer.is_inbounds();
+                let next_interval = self.get_next_announcement_time(current_time, is_inbounds);
+
+                debug_log!(
+                    current_time,
+                    self.node_id,
+                    "Scheduling inv to peer {peer_id} for time {next_interval}"
+                );
+                // Schedule the announcement to go off on the next trickle for the given peer
+                // Notice reconciliation requests are not on a poisson timer, they are triggered every fix interval.
+                // However, transactions are made available to reconcile following the peer's poisson timer
+                Some(ScheduledEvent::new(
+                    Event::process_scheduled_announcement(self.node_id, peer_id),
+                    next_interval,
+                ))
+            })
+            .collect()
     }
 
     /// Kickstarts the broadcasting logic for the simulated transaction to all the node's peers. This includes both fanout and transaction
@@ -565,7 +569,12 @@ impl Node {
     /// a delayed request, and return an event to be processed at a future time. If the node is outbounds, the request will be generated
     /// straightaway.
     /// No request will be generated if we already know the transaction
-    fn add_request(&mut self, peer_id: NodeId, request_time: u64) -> Option<ScheduledEvent> {
+    fn add_request(
+        &mut self,
+        peer_id: NodeId,
+        is_peer_inbounds: bool,
+        request_time: u64,
+    ) -> Option<ScheduledEvent> {
         if self.is_transaction_known_or_requested() {
             debug_log!(
                 request_time,
@@ -579,7 +588,7 @@ impl Node {
         // Inbound peers are de-prioritized. If an outbound peer announces a transaction
         // and an inbound peer request is in delayed stage, the inbounds will be dropped and
         // the outbound will be processed
-        if self.is_peer_inbounds(&peer_id) {
+        if is_peer_inbounds {
             if self.delayed_request.is_none() {
                 debug_log!(
                     request_time,
@@ -651,8 +660,10 @@ impl Node {
         request_time: u64,
     ) -> Option<ScheduledEvent> {
         let message: Option<ScheduledEvent>;
+        let is_peer_inbounds;
 
         if let Some(peer) = self.get_peer(&peer_id) {
+            is_peer_inbounds = peer.is_inbounds();
             match msg {
                 NetworkMessage::INV => {
                     assert!(self.knows_transaction(), "Trying to announce the transaction to a peer (peer_id: {peer_id}), but we should't know about");
@@ -677,7 +688,7 @@ impl Node {
                         "Trying to request the transaction from a peer (peer_id: {peer_id}), but we already know about it"
                     );
                     assert!(peer.they_announced_tx(), "Trying to request a transaction from a peer that shouldn't know about it (peer_id: {peer_id})");
-                    message = self.add_request(peer_id, request_time);
+                    message = self.add_request(peer_id, is_peer_inbounds, request_time);
                 }
                 NetworkMessage::TX => {
                     assert!(self.knows_transaction(), "Trying to send the transaction to a peer (peer_id: {peer_id}), but we shouldn't know about it");
@@ -754,8 +765,7 @@ impl Node {
                     self.node_id,
                     "Sending {msg} to peer {peer_id}"
                 );
-                self.node_statistics
-                    .add_sent(msg, self.is_peer_inbounds(&peer_id));
+                self.node_statistics.add_sent(msg, is_peer_inbounds);
             }
         }
 
@@ -771,6 +781,7 @@ impl Node {
         request_time: u64,
     ) -> Vec<ScheduledEvent> {
         let message: Vec<ScheduledEvent>;
+        let is_peer_inbounds;
 
         debug_log!(
             request_time,
@@ -782,6 +793,7 @@ impl Node {
         // Maybe we can work around this by passing a reference to the peer instead of the node id
         // and getting another reference down the line
         if let Some(peer) = self.get_peer(&peer_id) {
+            is_peer_inbounds = peer.is_inbounds();
             match msg {
                 NetworkMessage::INV => {
                     if !peer.we_announced_tx() {
@@ -904,7 +916,7 @@ impl Node {
                     // If they don't want the transaction, and we have the it in their set, they already know it
                     if !wants_tx && recon_state.get_recon_set() {
                         let peer_mut = self.get_peer_mut(&peer_id).unwrap();
-                        peer_mut.add_tx_announcement(TxAnnouncement::Sent)
+                        peer_mut.add_tx_announcement(TxAnnouncement::Sent);
                     }
 
                     self.get_peer_mut(&peer_id)
@@ -929,8 +941,7 @@ impl Node {
             panic!("Received an message from a node we are not connected to (node_id: {peer_id})");
         }
 
-        self.node_statistics
-            .add_received(&msg, self.is_peer_inbounds(&peer_id));
+        self.node_statistics.add_received(&msg, is_peer_inbounds);
 
         message
     }
@@ -1097,30 +1108,43 @@ mod test_node {
         let current_time = 0;
         // next_interval is initialized as 0
         assert_eq!(node.outbounds_poisson_timer.next_interval, 0);
-        for ref peer_id in outbound_peer_ids {
+        for _ in outbound_peer_ids {
             // Sampling a new interval should return a value geq than current time (mostly greater
             // but the sample could be zero).
-            assert!(node.get_next_announcement_time(current_time, *peer_id) >= current_time);
+            assert!(
+                node.get_next_announcement_time(current_time, /*is_inbounds=*/ false)
+                    >= current_time
+            );
             // Sampling twice with the same current_time should return a different value, given outbounds
             // do not share a timer
-            assert!(node.get_next_announcement_time(current_time, *peer_id) >= current_time);
+            assert!(
+                node.get_next_announcement_time(current_time, /*is_inbounds=*/ false)
+                    >= current_time
+            );
         }
 
         assert_eq!(node.inbounds_poisson_timer.next_interval, 0);
 
-        let shared_interval = node.get_next_announcement_time(current_time, inbound_peer_ids.start);
-        for ref peer_id in inbound_peer_ids {
-            // Same checks as for outbounds
-            let next_interval = node.get_next_announcement_time(current_time, *peer_id);
+        let shared_interval =
+            node.get_next_announcement_time(current_time, /*is_inbounds=*/ true);
+        for _ in inbound_peer_ids {
+            let next_interval =
+                node.get_next_announcement_time(current_time, /*is_inbounds=*/ true);
             assert!(next_interval >= current_time);
-            assert!(node.get_next_announcement_time(current_time, *peer_id) == next_interval);
+            assert!(
+                node.get_next_announcement_time(current_time, /*is_inbounds=*/ true)
+                    == next_interval
+            );
 
             // Also, check that every single returned value is the same, given inbounds share a timer
-            assert!(next_interval >= shared_interval);
-
-            // Sampling for a new interval (geq next_interval) will give you a new value
-            assert!(node.get_next_announcement_time(next_interval, *peer_id) > next_interval);
+            assert!(next_interval == shared_interval);
         }
+
+        // Sampling for a new interval (geq shared_interval) will give you a new value
+        assert!(
+            node.get_next_announcement_time(shared_interval, /*is_inbounds=*/ true)
+                > shared_interval
+        );
     }
 
     #[test]
@@ -1133,12 +1157,12 @@ mod test_node {
 
         for peer_id in outbound_peer_ids.clone() {
             node.connect(peer_id, true);
-            assert!(node.out_peers.contains_key(&peer_id));
+            assert!(node.get_outbound_peer_ids().contains(&peer_id));
         }
 
         for peer_id in inbound_peer_ids.clone() {
             node.accept_connection(peer_id, true);
-            assert!(node.in_peers.contains_key(&peer_id));
+            assert!(node.get_inbound_peer_ids().contains(&peer_id));
         }
     }
 
@@ -1162,7 +1186,7 @@ mod test_node {
             if let Event::ProcessScheduledAnnouncement(src, dst) = e.inner {
                 assert_eq!(src, node_id);
                 assert!(outbound_peer_ids.contains(&dst));
-                assert!(node.out_peers.get(&dst).unwrap().to_be_announced())
+                assert!(node.get_peer(&dst).unwrap().to_be_announced())
             };
         }
     }
@@ -1194,10 +1218,9 @@ mod test_node {
                 assert_eq!(src, node_id);
                 assert!(outbound_peer_ids.contains(&dst));
                 // The transaction is flagged to_be_announced or added to the recon_set depending on should_fanout_to
-                if node.out_peers.get(&dst).unwrap().to_be_announced() {
+                if node.get_peer(&dst).unwrap().to_be_announced() {
                     assert!(!node
-                        .out_peers
-                        .get(&dst)
+                        .get_peer(&dst)
                         .unwrap()
                         .get_tx_reconciliation_state()
                         .unwrap()
@@ -1205,8 +1228,7 @@ mod test_node {
                     fanout_count += 1;
                 } else {
                     assert!(node
-                        .out_peers
-                        .get(&dst)
+                        .get_peer(&dst)
                         .unwrap()
                         .get_tx_reconciliation_state()
                         .unwrap()
@@ -1406,7 +1428,9 @@ mod test_node {
         node.accept_connection(inbound_id, true);
 
         // Adding a request for a transaction we don't know will generate a get data message
-        let e = node.add_request(outbound_id, current_time).unwrap();
+        let e = node
+            .add_request(outbound_id, /*is_peer_inbounds=*/ false, current_time)
+            .unwrap();
         assert_eq!(e.time(), current_time);
         assert!(e.inner.is_receive_message());
         if let Event::ReceiveMessageFrom(s, d, m) = e.inner {
@@ -1418,14 +1442,20 @@ mod test_node {
         assert!(node.has_requested_transaction());
 
         // Trying to add a request twice won't generate a get data again
-        assert!(node.add_request(outbound_id, current_time).is_none());
+        assert!(node
+            .add_request(outbound_id, /*is_peer_inbounds=*/ false, current_time)
+            .is_none());
         // This holds even if we try to request it to another peer
-        assert!(node.add_request(inbound_id, current_time).is_none());
+        assert!(node
+            .add_request(inbound_id, /*is_peer_inbounds=*/ true, current_time)
+            .is_none());
 
         // If the peer is inbound instead of outbounds, the request is delayed instead of processed straightaway
         node.requested_transaction = false; // We need to reset this manually since the transaction can only be requested once
         assert!(node.delayed_request.is_none());
-        let e = node.add_request(inbound_id, current_time).unwrap();
+        let e = node
+            .add_request(inbound_id, /*is_peer_inbounds=*/ true, current_time)
+            .unwrap();
         assert_eq!(e.inner, Event::ProcessDelayedRequest(node_id, inbound_id));
         assert!(e.time() > current_time);
         // The transaction is kept in the delayed_requests collection for future processing
@@ -1443,7 +1473,7 @@ mod test_node {
         node.accept_connection(inbound_id, true);
 
         // Add a delayed request
-        node.add_request(inbound_id, current_time);
+        node.add_request(inbound_id, /*is_peer_inbounds=*/ true, current_time);
         assert!(node.delayed_request.is_some());
         // Process the delayed request
         let e = node
@@ -1460,7 +1490,9 @@ mod test_node {
 
         // If the transaction is already known (because a non-delayed request containing it was already processed)
         // there won't be any event
-        assert!(node.add_request(inbound_id, current_time).is_none());
+        assert!(node
+            .add_request(inbound_id, /*is_peer_inbounds=*/ true, current_time)
+            .is_none());
     }
 
     // [Node::send_message_to] and [Node::receive_message_from] are self tested.
