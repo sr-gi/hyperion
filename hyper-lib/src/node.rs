@@ -846,15 +846,14 @@ impl Node {
                         // Our INV and their REQRECON may have crossed, but it must not be the case they have sent both an INV and a REQRECON for the same transaction
                         assert!(!peer.they_announced_tx(), "Received a reconciliation request from peer (peer_id: {peer_id}) but they have already announced the transaction");
                     }
-                    let peer = self.get_peer_mut(&peer_id).unwrap();
-                    assert!(!peer.get_tx_reconciliation_state().unwrap().is_reconciling(), "Received a reconciliation request from a peer we are already reconciling with (peer_id: {peer_id})");
-                    peer.get_tx_reconciliation_state_mut()
+                    let peer_recon_state = self
+                        .get_peer_mut(&peer_id)
                         .unwrap()
-                        .set_reconciling();
-                    let sketch = peer
-                        .get_tx_reconciliation_state()
-                        .unwrap()
-                        .compute_sketch(has_tx);
+                        .get_tx_reconciliation_state_mut()
+                        .unwrap();
+                    assert!(!peer_recon_state.is_reconciling(), "Received a reconciliation request from a peer we are already reconciling with (peer_id: {peer_id})");
+                    peer_recon_state.set_reconciling();
+                    let sketch = peer_recon_state.compute_sketch(has_tx);
 
                     message = self
                         .send_message_to(NetworkMessage::SKETCH(sketch), peer_id, request_time)
@@ -917,10 +916,21 @@ impl Node {
                         assert!(!peer.already_announced(), "Received a reconciliation difference from peer (peer_id: {peer_id}) containing a transaction they already know");
                     }
 
-                    // If they don't want the transaction, and we have the it in their set, they already know it
-                    if !wants_tx && recon_state.get_recon_set() {
+                    // If they don't want the transaction, and it was part of the sketch we sent them, they already know it
+                    if !wants_tx && recon_state.get_sketch_snapshot().get_tx_set() {
                         let peer_mut = self.get_peer_mut(&peer_id).unwrap();
-                        peer_mut.add_tx_announcement(TxAnnouncement::Sent);
+                        // Flag it as announced as long as they haven't announced it to us already.
+                        // This can happen if an INV is received after we sent a SKETCH but before they
+                        // receive it (SKETCH and INV crossed)
+                        if !peer_mut.they_announced_tx() {
+                            peer_mut.add_tx_announcement(TxAnnouncement::Sent);
+                        } else {
+                            debug_log!(
+                                request_time,
+                                self.node_id,
+                                "SKETCH and INV crossed with peer (peer_id: {peer_id})"
+                            );
+                        }
                     }
 
                     self.get_peer_mut(&peer_id)
