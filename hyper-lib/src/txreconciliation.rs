@@ -33,6 +33,8 @@ pub struct TxReconciliationState {
     is_reconciling: bool,
     /// Whether the simulated transaction is in the reconciliation set
     recon_set: bool,
+    /// The last Sketch we sent our peer if reconciling
+    sketch_snapshot: Option<Sketch>,
 }
 
 impl TxReconciliationState {
@@ -41,12 +43,14 @@ impl TxReconciliationState {
             is_initiator,
             is_reconciling: false,
             recon_set: false,
+            sketch_snapshot: None,
         }
     }
 
     pub fn clear(&mut self) {
         self.is_reconciling = false;
         self.recon_set = false;
+        self.sketch_snapshot = None;
     }
 
     pub fn is_initiator(&self) -> bool {
@@ -80,7 +84,7 @@ impl TxReconciliationState {
         self.recon_set
     }
 
-    pub fn compute_sketch(&self, they_know_tx: bool) -> Sketch {
+    pub fn compute_sketch(&mut self, they_know_tx: bool) -> Sketch {
         // q cannot be easily predicted in a short simulation, however it is needed to size the sketch properly.
         // As a workaround, the sketches exchanges by the simulator are not really sketches, but knowledge of whether
         // the sender knows the given transaction. q can be scaled down if needed to mimic scenarios where the sketch
@@ -90,7 +94,20 @@ impl TxReconciliationState {
         // We can compute the size of the diff as int(A XOR B)
         // TODO: Scale q if required so the predicted difference is not always 100% accurate
         let q = (local_set ^ remote_set) as usize;
-        Sketch::new(local_set, q)
+        let sketch = Sketch::new(local_set, q);
+        // Save the sketch so we can compare data with it when we receive a RECONDIFF. Otherwise, we could be adding data
+        // to the reconciliation set in between sending a sketch and receiving a diff, and end up computing a wrong local diff
+        self.sketch_snapshot = Some(sketch);
+
+        sketch
+    }
+
+    pub fn has_sketch_snapshot(&self) -> bool {
+        self.sketch_snapshot.is_some()
+    }
+
+    pub fn get_sketch_snapshot(&self) -> &Sketch {
+        self.sketch_snapshot.as_ref().unwrap()
     }
 
     pub fn compute_sketch_diff(&self, sketch: Sketch) -> (bool, bool) {
