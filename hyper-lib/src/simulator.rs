@@ -17,7 +17,9 @@ pub enum Event {
     /// The destination (0) receives a new message (2) from given source (1)
     ReceiveMessageFrom(NodeId, NodeId, NetworkMessage),
     /// A given node (0) processes an scheduled announcements to a given peer (1)
-    ProcessScheduledAnnouncement(NodeId, NodeId),
+    ProcessScheduledOutboundAnnouncement(NodeId, NodeId),
+    /// A given node (0) processes all scheduled announcements to inbound peers
+    ProcessScheduledInboundAnnouncements(NodeId),
     /// A given node (0) processed a delayed request of a give transaction (1)
     ProcessDelayedRequest(NodeId, NodeId),
     /// Processes a scheduled reconciliation on the given node (0) with a given peer (1)
@@ -29,8 +31,12 @@ impl Event {
         Event::ReceiveMessageFrom(src, dst, msg)
     }
 
-    pub fn process_scheduled_announcement(src: NodeId, dst: NodeId) -> Self {
-        Event::ProcessScheduledAnnouncement(src, dst)
+    pub fn process_scheduled_outbound_announcement(src: NodeId, dst: NodeId) -> Self {
+        Event::ProcessScheduledOutboundAnnouncement(src, dst)
+    }
+
+    pub fn process_scheduled_inbound_announcements(src: NodeId) -> Self {
+        Event::ProcessScheduledInboundAnnouncements(src)
     }
 
     pub fn process_delayed_request(src: NodeId, dst: NodeId) -> Self {
@@ -55,7 +61,8 @@ impl Event {
     pub fn get_link(&self) -> Option<Link> {
         match self {
             Event::ReceiveMessageFrom(a, b, _) => Some((*a, *b).into()),
-            Event::ProcessScheduledAnnouncement(a, b) => Some((*a, *b).into()),
+            Event::ProcessScheduledOutboundAnnouncement(a, b) => Some((*a, *b).into()),
+            Event::ProcessScheduledInboundAnnouncements(_) => None,
             Event::ProcessDelayedRequest(a, b) => Some((*a, *b).into()),
             Event::ProcessScheduledReconciliation(a, b) => Some((*a, *b).into()),
         }

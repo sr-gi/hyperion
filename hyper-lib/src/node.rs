@@ -306,6 +306,14 @@ impl Node {
             .collect()
     }
 
+    fn get_inbound_peers_mut(&mut self) -> Vec<&mut Peer> {
+        self.peers
+            .iter_mut()
+            .filter(|(_, peer)| peer.is_inbounds())
+            .map(|(_, peer)| peer)
+            .collect()
+    }
+
     pub fn get_outbound_peers(&self) -> Vec<&Peer> {
         self.peers
             .iter()
@@ -429,10 +437,9 @@ impl Node {
         // First, we selected the subset of peers that will be picked for fanout
         self.choose_fanout_targets();
 
-        // Collect peer IDs to avoid holding an immutable borrow while mutating self
-        let peer_ids = self.peers.keys().copied().collect::<Vec<_>>();
-
-        peer_ids
+        // Start scheduling the outbounds
+        let mut events = self
+            .get_outbound_peer_ids()
             .into_iter()
             .filter_map(|peer_id| {
                 let peer = self.get_peer_mut(&peer_id).unwrap();
@@ -449,8 +456,8 @@ impl Node {
                 // For now, reconciliation is being responded when the request is received, so all needs to be though tx_announcement
                 // to make sure the delays are met.
                 peer.schedule_tx_announcement();
-                let is_inbounds = peer.is_inbounds();
-                let next_interval = self.get_next_announcement_time(current_time, is_inbounds);
+                let next_interval =
+                    self.get_next_announcement_time(current_time, /*is_inbounds=*/ false);
 
                 debug_log!(
                     current_time,
@@ -461,11 +468,36 @@ impl Node {
                 // Notice reconciliation requests are not on a poisson timer, they are triggered every fix interval.
                 // However, transactions are added to the peer's reconciliation set following the same timer.
                 Some(ScheduledEvent::new(
-                    Event::process_scheduled_announcement(self.node_id, peer_id),
+                    Event::process_scheduled_outbound_announcement(self.node_id, peer_id),
                     next_interval,
                 ))
             })
-            .collect()
+            .collect::<Vec<_>>();
+
+        // Now, schedule a single event for all the inbounds that are pending announcement, given they are all on the same timer
+        let mut pending_inbounds = false;
+        for peer in self.get_inbound_peers_mut() {
+            if !peer.already_announced() {
+                peer.schedule_tx_announcement();
+                pending_inbounds = true;
+            }
+        }
+
+        let next_interval_inbounds =
+            self.get_next_announcement_time(current_time, /*is_inbounds=*/ true);
+        debug_log!(
+            current_time,
+            self.node_id,
+            "Scheduling inv to inbound peers for time {next_interval_inbounds}"
+        );
+        if pending_inbounds {
+            events.push(ScheduledEvent::new(
+                Event::process_scheduled_inbound_announcements(self.node_id),
+                next_interval_inbounds,
+            ));
+        }
+
+        events
     }
 
     /// Kickstarts the broadcasting logic for the simulated transaction to all the node's peers. This includes both fanout and transaction
@@ -561,6 +593,27 @@ impl Node {
         }
 
         event
+    }
+
+    /// Processes all pending inbound scheduled announcements
+    pub fn process_inbound_scheduled_announcements(
+        &mut self,
+        current_time: u64,
+    ) -> Vec<ScheduledEvent> {
+        // Filter inbound peers that are pending to process the scheduled announcement
+        let target_inbound_peers = self
+            .peers
+            .iter()
+            .filter_map(|(peer_id, peer)| {
+                (peer.is_inbounds() && peer.to_be_announced()).then_some(*peer_id)
+            })
+            .collect::<Vec<_>>();
+
+        // Process the announcements
+        target_inbound_peers
+            .into_iter()
+            .filter_map(|peer_id| self.process_scheduled_announcement(peer_id, current_time))
+            .collect()
     }
 
     /// Records the request of the simulated transaction in or tracker (assigned to a given peer). If the peer is inbounds, this will generate
@@ -1158,8 +1211,11 @@ mod test_node {
         let events = node.schedule_tx_announcement(0);
         assert_eq!(events.len(), outbound_peer_ids.len());
         for e in events {
-            assert!(matches!(e.inner, Event::ProcessScheduledAnnouncement(..)));
-            if let Event::ProcessScheduledAnnouncement(src, dst) = e.inner {
+            assert!(matches!(
+                e.inner,
+                Event::ProcessScheduledOutboundAnnouncement(..)
+            ));
+            if let Event::ProcessScheduledOutboundAnnouncement(src, dst) = e.inner {
                 assert_eq!(src, node_id);
                 assert!(outbound_peer_ids.contains(&dst));
                 assert!(node.get_peer(&dst).unwrap().to_be_announced())
@@ -1187,10 +1243,13 @@ mod test_node {
         let events = node.schedule_tx_announcement(current_time);
         assert_eq!(events.len(), outbound_peer_ids.len());
         for e in events {
-            assert!(matches!(e.inner, Event::ProcessScheduledAnnouncement(..)));
+            assert!(matches!(
+                e.inner,
+                Event::ProcessScheduledOutboundAnnouncement(..)
+            ));
             // Events are all in the future
             assert!(e.time() > current_time);
-            if let Event::ProcessScheduledAnnouncement(src, dst) = e.inner {
+            if let Event::ProcessScheduledOutboundAnnouncement(src, dst) = e.inner {
                 assert_eq!(src, node_id);
                 assert!(outbound_peer_ids.contains(&dst));
                 // The transaction always goes through the to_be_announced queue so it is properly delayed
@@ -1240,10 +1299,16 @@ mod test_node {
         for e in events {
             // Events are all in the future
             assert!(e.time() > current_time);
-            assert!(matches!(e.inner, Event::ProcessScheduledAnnouncement(..)));
-            if let Event::ProcessScheduledAnnouncement(src, dst) = e.inner {
+            assert!(
+                matches!(e.inner, Event::ProcessScheduledOutboundAnnouncement(..))
+                    || matches!(e.inner, Event::ProcessScheduledInboundAnnouncements(..))
+            );
+
+            if let Event::ProcessScheduledOutboundAnnouncement(src, dst) = e.inner {
                 assert_eq!(src, node_id);
-                assert!(outbound_peer_ids.contains(&dst) || inbound_peer_ids.contains(&dst));
+                assert!(outbound_peer_ids.contains(&dst));
+            } else if let Event::ProcessScheduledInboundAnnouncements(src) = e.inner {
+                assert_eq!(src, node_id);
             }
         }
     }

@@ -102,15 +102,23 @@ fn main() -> anyhow::Result<()> {
                         .receive_message_from(msg, src, current_time);
                     simulator.add_events(future_events);
                 }
-                Event::ProcessScheduledAnnouncement(src, dst) => {
-                    if let Some(scheduled_event) = simulator
+                Event::ProcessScheduledOutboundAnnouncement(src, dst) => {
+                    if let Some(future_event) = simulator
                         .network
                         .get_node_mut(src)
                         .unwrap()
                         .process_scheduled_announcement(dst, current_time)
                     {
-                        simulator.add_event(scheduled_event);
+                        simulator.add_event(future_event);
                     }
+                }
+                Event::ProcessScheduledInboundAnnouncements(src) => {
+                    let future_events = simulator
+                        .network
+                        .get_node_mut(src)
+                        .unwrap()
+                        .process_inbound_scheduled_announcements(current_time);
+                    simulator.add_events(future_events);
                 }
                 Event::ProcessDelayedRequest(target, peer_id) => {
                     if let Some(delayed_event) = simulator
