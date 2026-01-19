@@ -541,26 +541,39 @@ impl Node {
         &mut self,
         peer_id: NodeId,
         current_time: u64,
-    ) -> Option<ScheduledEvent> {
+    ) -> Vec<ScheduledEvent> {
         let peer: &Peer = self.get_peer(&peer_id).unwrap();
-        assert!(
-            !peer.we_announced_tx(),
-            "Trying to process a duplicated scheduled announcement"
-        );
+        let is_peer_inbounds = peer.is_inbounds();
 
-        let mut event = None;
+        let mut events = Vec::new();
         // Drop the announcement if the peer has already announced the transaction.
         if peer.to_be_announced() {
             if self.should_fanout_to(&peer_id) {
                 // We are simulating a single transaction, so that always fits within a single INV
-                event = self.send_message_to(NetworkMessage::INV, peer_id, current_time)
+                events.push(
+                    self.send_message_to(NetworkMessage::INV, peer_id, current_time)
+                        .unwrap(),
+                )
             } else {
                 self.get_peer_mut(&peer_id).unwrap().add_tx_to_reconcile();
                 // TODO: Not ready yet, but here we should also respond to pending reconciliation requests when we rework this.
             }
         }
 
-        event
+        // For Erlay simulations, make the announcement schedule recurrent so we can reply to reconciliation requests on trickle.
+        // Given we only simulate a single transaction, this is not relevant for non-erlay sims, but it would be if we ever want to
+        // simulate multiple ones
+        if self.is_erlay
+            && !(self.knows_transaction()
+                && self.peers.values().all(|peer| peer.already_announced()))
+        {
+            events.push(ScheduledEvent::new(
+                Event::process_scheduled_announcement(self.node_id, peer_id),
+                self.get_next_announcement_time(current_time, is_peer_inbounds),
+            ));
+        }
+
+        events
     }
 
     /// Records the request of the simulated transaction in or tracker (assigned to a given peer). If the peer is inbounds, this will generate
@@ -1329,12 +1342,14 @@ mod test_node {
             node.connect(*peer_id, true);
         }
 
-        // Processing a scheduled announcement with no data to be sent returns nothing
-        for peer_id in peer_ids.iter() {
-            assert!(node
-                .process_scheduled_announcement(*peer_id, current_time)
-                .is_none());
-        }
+        // Processing a scheduled announcement with no data returns only the next `ProcessScheduledAnnouncement`
+        // event, but no announcement
+        let events = node.process_scheduled_announcement(peer_ids[0], current_time);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            events[0].inner,
+            Event::ProcessScheduledAnnouncement { .. }
+        ));
 
         // If the peer has data pending to be sent, an INV message containing such data will be returned.
         // Also, if the peer had some data to be reconciled, that data will be made available (moved out of the delayed set)
@@ -1360,9 +1375,14 @@ mod test_node {
         for peer_id in peer_ids.iter() {
             let result = node.process_scheduled_announcement(*peer_id, current_time);
             if node.fanout_targets.contains(peer_id) {
-                let inv_event = result.unwrap().inner;
-                assert!(matches!(inv_event, Event::ReceiveMessageFrom(..)));
-                assert!(inv_event.get_message().unwrap().is_inv());
+                assert_eq!(result.len(), 2);
+                assert!(matches!(result[0].inner, Event::ReceiveMessageFrom(..)));
+                assert!(result[0].inner.get_message().unwrap().is_inv());
+                assert!(matches!(
+                    result[1].inner,
+                    Event::ProcessScheduledAnnouncement(..)
+                ));
+
                 // Nothing is added to the reconciliation set of fanout peers
                 assert!(!node
                     .get_peer(peer_id)
@@ -1371,7 +1391,13 @@ mod test_node {
                     .unwrap()
                     .get_recon_set());
             } else {
-                assert!(result.is_none());
+                assert_eq!(result.len(), 1);
+                assert!(matches!(
+                    result[0].inner,
+                    Event::ProcessScheduledAnnouncement(..)
+                ));
+
+                // Data is added to the reconciliation set
                 assert!(node
                     .get_peer(peer_id)
                     .unwrap()
