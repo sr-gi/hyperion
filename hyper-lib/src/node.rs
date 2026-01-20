@@ -707,12 +707,14 @@ impl Node {
                         // Nor should we try to reconcile if they have already announced the transaction
                         assert!(!peer.they_announced_tx(), "Trying to reconcile a transaction with a peer that has already announced it to us (peer_id: {peer_id})");
                     }
-                    assert!(!peer.get_tx_reconciliation_state().unwrap().is_reconciling(), "Trying to send a reconciliation request to a peer we are already reconciling with (peer_id: {peer_id})");
-                    self.get_peer_mut(&peer_id)
+                    let peer_recon_state = self
+                        .get_peer_mut(&peer_id)
                         .unwrap()
                         .get_tx_reconciliation_state_mut()
-                        .unwrap()
-                        .set_reconciling();
+                        .unwrap();
+                    assert!(!peer_recon_state.is_reconciling(), "Trying to send a reconciliation request to a peer we are already reconciling with (peer_id: {peer_id})");
+                    assert!(!peer_recon_state.is_initiator(), "Trying to send a reconciliation request to an inbound peer (peer_id: {peer_id})");
+                    peer_recon_state.set_reconciling();
                     message = Some(ScheduledEvent::new(
                         Event::receive_message_from(self.node_id, peer_id, msg),
                         request_time,
@@ -734,18 +736,17 @@ impl Node {
                 NetworkMessage::RECONCILDIFF(wants_tx) => {
                     assert!(self.is_erlay, "Trying to send a reconciliation difference to peer (peer_id: {peer_id}) but we do not support Erlay");
                     assert!(peer.is_erlay(), "Trying to send a reconciliation difference to peer (peer_id: {peer_id}), but they do not support Erlay");
-                    assert!(peer.get_tx_reconciliation_state().unwrap().is_reconciling(), "Trying to send a reconciliation difference to a peer that hasn't requested so (peer_id: {peer_id})");
-                    {
-                        // If they offered a transaction that is scheduled for announcement we will request it for reconciliation to prevent probing.
-                        // In this case, mark the scheduled announcement as stale so we do not end up sending an additional INV or adding
-                        // the transaction in the next reconciliation set.
-                        let peer_mut = self.get_peer_mut(&peer_id).unwrap();
-                        let recon_set = peer_mut.get_tx_reconciliation_state_mut().unwrap();
-                        recon_set.clear();
 
-                        if peer_mut.to_be_announced() && wants_tx {
-                            peer_mut.flag_as_stale();
-                        }
+                    let peer_mut = self.get_peer_mut(&peer_id).unwrap();
+                    let peer_recon_state = peer_mut.get_tx_reconciliation_state_mut().unwrap();
+                    assert!(peer_recon_state.is_reconciling(), "Trying to send a reconciliation difference to a peer that hasn't requested so (peer_id: {peer_id})");
+                    peer_recon_state.clear();
+
+                    // If they offered a transaction that is scheduled for announcement we will request it for reconciliation to prevent probing.
+                    // In this case, mark the scheduled announcement as stale so we do not end up sending an additional INV or adding
+                    // the transaction in the next reconciliation set.
+                    if peer_mut.to_be_announced() && wants_tx {
+                        peer_mut.flag_as_stale();
                     }
 
                     message = Some(ScheduledEvent::new(
@@ -862,10 +863,10 @@ impl Node {
                 NetworkMessage::SKETCH(sketch) => {
                     assert!(self.is_erlay, "Received a reconciliation sketch from peer (peer_id: {peer_id}) but we do not support Erlay");
                     assert!(peer.is_erlay(), "Received a reconciliation sketch from peer (peer_id: {peer_id}) but they do not support Erlay");
-                    assert!(peer.get_tx_reconciliation_state().unwrap().is_reconciling(), "Received a reconciliation sketch from a peer that we haven't requested to reconcile with (peer_id: {peer_id})");
 
                     // Compute the local difference and remote difference between the sets (what we are missing and they are missing respectively)
                     let peer_recon_state = peer.get_tx_reconciliation_state().unwrap();
+                    assert!(peer_recon_state.is_reconciling(), "Received a reconciliation sketch from a peer that we haven't requested to reconcile with (peer_id: {peer_id})");
                     let (mut request_tx, offer_tx) = peer_recon_state.compute_sketch_diff(sketch);
 
                     // There are two cases in where, even if we know the transaction, we should be requesting it to prevent probing:
@@ -907,18 +908,20 @@ impl Node {
                     message = events
                 }
                 NetworkMessage::RECONCILDIFF(wants_tx) => {
-                    let recon_state = peer.get_tx_reconciliation_state().unwrap();
+                    let peer_recon_state = peer.get_tx_reconciliation_state().unwrap();
                     assert!(self.is_erlay, "Received a reconciliation difference from peer (peer_id: {peer_id}) but we do not support Erlay");
                     assert!(peer.is_erlay(), "Received a reconciliation difference from peer (peer_id: {peer_id}) but they do not support Erlay");
-                    assert!(peer.get_tx_reconciliation_state().unwrap().is_reconciling(), "Received a reconciliation difference from a peer that we haven't requested to reconcile with (peer_id: {peer_id})");
+                    assert!(peer_recon_state.is_reconciling(), "Received a reconciliation difference from a peer that we haven't requested to reconcile with (peer_id: {peer_id})");
                     if wants_tx {
                         assert!(self.knows_transaction(), "Received a reconciliation difference from peer (peer_id: {peer_id}) containing a transaction we don't know about");
                         assert!(!peer.already_announced(), "Received a reconciliation difference from peer (peer_id: {peer_id}) containing a transaction they already know");
                     }
 
                     // If they don't want the transaction, and it was part of the sketch we sent them, they already know it
-                    if !wants_tx && recon_state.get_sketch_snapshot().get_tx_set() {
-                        let peer_mut = self.get_peer_mut(&peer_id).unwrap();
+                    let node_id = self.node_id;
+                    let we_offered_tx = peer_recon_state.get_sketch_snapshot().get_tx_set();
+                    let peer_mut = self.get_peer_mut(&peer_id).unwrap();
+                    if !wants_tx && we_offered_tx {
                         // Flag it as announced as long as they haven't announced it to us already.
                         // This can happen if an INV is received after we sent a SKETCH but before they
                         // receive it (SKETCH and INV crossed)
@@ -927,17 +930,13 @@ impl Node {
                         } else {
                             debug_log!(
                                 request_time,
-                                self.node_id,
+                                node_id,
                                 "SKETCH and INV crossed with peer (peer_id: {peer_id})"
                             );
                         }
                     }
 
-                    self.get_peer_mut(&peer_id)
-                        .unwrap()
-                        .get_tx_reconciliation_state_mut()
-                        .unwrap()
-                        .clear();
+                    peer_mut.get_tx_reconciliation_state_mut().unwrap().clear();
 
                     // Send them the transaction if they want it. We are purposely sending this straightaway
                     // instead of scheduling, given the availability of the transaction has already gone through
