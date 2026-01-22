@@ -35,6 +35,8 @@ pub struct TxReconciliationState {
     recon_set: bool,
     /// The last Sketch we sent our peer if reconciling
     sketch_snapshot: Option<Sketch>,
+    /// Whether this peer has a reconciliation request pending to be responded to. Applies only to initiators.
+    requested_reconciliation: Option<bool>,
 }
 
 impl TxReconciliationState {
@@ -44,6 +46,7 @@ impl TxReconciliationState {
             is_reconciling: false,
             recon_set: false,
             sketch_snapshot: None,
+            requested_reconciliation: None,
         }
     }
 
@@ -51,6 +54,7 @@ impl TxReconciliationState {
         self.is_reconciling = false;
         self.recon_set = false;
         self.sketch_snapshot = None;
+        self.requested_reconciliation = None;
     }
 
     pub fn is_initiator(&self) -> bool {
@@ -70,6 +74,18 @@ impl TxReconciliationState {
     /// there's nothing we can do about it
     pub fn remove_tx(&mut self) {
         self.recon_set = false;
+    }
+
+    pub fn add_reconciliation_request(&mut self, reqrecon: bool) {
+        assert!(
+            self.is_initiator(),
+            "Tried to store a reconciliation request in a non-initiator peer"
+        );
+        self.requested_reconciliation = Some(reqrecon)
+    }
+
+    pub fn fetch_reconciliation_request(&mut self) -> Option<bool> {
+        self.requested_reconciliation.take()
     }
 
     pub fn set_reconciling(&mut self) {
