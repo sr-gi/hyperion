@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::rc::Rc;
 
@@ -189,6 +189,39 @@ impl Peer {
     }
 }
 
+#[derive(Clone)]
+/// Keeps track of transaction reception information via reconciliation. Used in the broadcasting decision-making
+/// for Erlay nodes
+struct ReconciliationTracker {
+    invs_from_recon: HashSet<NodeId>,
+    tx_via_recon: bool,
+}
+
+impl ReconciliationTracker {
+    fn new() -> Self {
+        ReconciliationTracker {
+            invs_from_recon: HashSet::new(),
+            tx_via_recon: false,
+        }
+    }
+
+    fn track_received_inv(&mut self, peer_id: NodeId) {
+        self.invs_from_recon.insert(peer_id);
+    }
+
+    fn was_announced_by(&self, peer_id: &NodeId) -> bool {
+        self.invs_from_recon.contains(peer_id)
+    }
+
+    fn flag_as_received(&mut self) {
+        self.tx_via_recon = true;
+    }
+
+    fn was_received_via_recon(&self) -> bool {
+        self.tx_via_recon
+    }
+}
+
 /// A node is the main unit of the simulator. It represents an abstractions of a Bitcoin node and
 /// stores all the data required to simulate sending and receiving the simulated transaction
 #[derive(Clone)]
@@ -217,6 +250,8 @@ pub struct Node {
     fanout_targets: Vec<NodeId>,
     /// Amount of messages of each time the node has sent/received
     node_statistics: NodeStatistics,
+    /// Keeps track  transaction announcements and transactions received from reconciliation
+    recon_tracker: Option<ReconciliationTracker>,
     /// TODO: We could use the statistics for this. However, they are currently designed so that they keep being appended (the nth iteration
     /// of the simulation has all the previous statistics appended to it), so it would need re-designing.
     pub out_fanout_count: (u16, u16),
@@ -243,6 +278,11 @@ impl Node {
             fanout_targets: Vec::new(),
             node_statistics: NodeStatistics::new(),
             out_fanout_count: (0, 0),
+            recon_tracker: if is_erlay {
+                Some(ReconciliationTracker::new())
+            } else {
+                None
+            },
         }
     }
 
@@ -251,6 +291,9 @@ impl Node {
         self.inbounds_poisson_timer.next_interval = 0;
         self.outbounds_poisson_timer.next_interval = 0;
         self.out_fanout_count = (0, 0);
+        if self.is_erlay {
+            self.recon_tracker = Some(ReconciliationTracker::new());
+        }
 
         self.requested_transaction = false;
         self.delayed_request = None;
@@ -441,8 +484,14 @@ impl Node {
             // Inbound targets are selected when the transaction is received
             self.fanout_targets.contains(peer_id)
         } else {
-            // For Erlay outbounds, we pick them based on when their timers go off, until we reach the desired threshold
-            self.get_outbound_fanout_count() as u64 <= *OUTBOUND_FANOUT_THRESHOLD as u64
+            let received_via_recon = self
+                .recon_tracker
+                .as_ref()
+                .unwrap()
+                .was_received_via_recon();
+            // For Erlay outbounds, we only fanout if we received the transaction via fanout AND we have not reached the fanout threshold
+            !received_via_recon
+                && self.get_outbound_fanout_count() as u64 <= *OUTBOUND_FANOUT_THRESHOLD as u64
         }
     }
 
@@ -921,7 +970,13 @@ impl Node {
                 NetworkMessage::TX => {
                     assert!(!self.knows_transaction(), "Received the transaction from a peer (peer_id: {peer_id}), but we already knew about it");
                     assert!(peer.they_announced_tx(), "Received a transaction from a peer without an announcement (peer_id {peer_id})");
-                    message = self.broadcast_tx(request_time)
+                    message = self.broadcast_tx(request_time);
+                    // Flag as received via reconciliation if the source announced it via reconciliation
+                    if let Some(recon_tracker) = self.recon_tracker.as_mut() {
+                        if recon_tracker.was_announced_by(&peer_id) {
+                            recon_tracker.flag_as_received();
+                        }
+                    }
                 }
                 NetworkMessage::REQRECON(has_tx) => {
                     assert!(self.is_erlay, "Received a reconciliation request from peer (peer_id: {peer_id}) but we do not support Erlay");
@@ -967,6 +1022,15 @@ impl Node {
                         self.get_peer_mut(&peer_id)
                             .unwrap()
                             .add_tx_announcement(TxAnnouncement::Received);
+                    }
+
+                    // Flag as announced via reconciliation if we request it.
+                    // If we end up receiving the transaction from this peer it may shape the way we fanout/reconcile forward.
+                    if request_tx {
+                        self.recon_tracker
+                            .as_mut()
+                            .unwrap()
+                            .track_received_inv(peer_id);
                     }
 
                     // Send a RECONCILDIFF signaling whether we want the transaction or not, and an INV corresponding to the transaction if they are missing it
