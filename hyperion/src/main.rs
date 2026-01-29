@@ -70,13 +70,15 @@ fn main() -> anyhow::Result<()> {
         // All simulations start at time 0 so we don't have to carry any offset when computing
         // the overall time
         simulator.schedule_set_reconciliation(start_time);
-        for e in simulator
-            .get_node_mut(source_node_id)
-            .unwrap()
-            .broadcast_tx(start_time)
-        {
+        let source_node = simulator.get_node_mut(source_node_id).unwrap();
+        // Probing prevention. Source nodes do not receive the transaction from anyone else, therefore they will
+        // propagate it to one extra outbound. If the node happens to be unreachable, that would be a tell (otherwise
+        // it could have received it from a inbound peer, which doesn't count towards this threshold)
+        source_node.received_outbound_inv();
+        for e in source_node.broadcast_tx(start_time) {
             simulator.add_event(e);
         }
+
         // Record the initial time as the time when the first node sends out the transaction.
         // We don't need to account for the time the source withholds it
         let first_seen_time = simulator.get_next_event_time().unwrap();

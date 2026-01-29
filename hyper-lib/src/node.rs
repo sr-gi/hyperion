@@ -217,6 +217,9 @@ pub struct Node {
     fanout_targets: Vec<NodeId>,
     /// Amount of messages of each time the node has sent/received
     node_statistics: NodeStatistics,
+    /// TODO: We could use the statistics for this. However, they are currently designed so that they keep being appended (the nth iteration
+    /// of the simulation has all the previous statistics appended to it), so it would need re-designing.
+    pub out_fanout_count: (u16, u16),
 }
 
 impl Node {
@@ -239,6 +242,7 @@ impl Node {
             outbounds_poisson_timer: PoissonTimer::new(*OUTBOUND_INVENTORY_BROADCAST_INTERVAL),
             fanout_targets: Vec::new(),
             node_statistics: NodeStatistics::new(),
+            out_fanout_count: (0, 0),
         }
     }
 
@@ -246,6 +250,7 @@ impl Node {
     pub fn reset(&mut self) {
         self.inbounds_poisson_timer.next_interval = 0;
         self.outbounds_poisson_timer.next_interval = 0;
+        self.out_fanout_count = (0, 0);
 
         self.requested_transaction = false;
         self.delayed_request = None;
@@ -318,6 +323,18 @@ impl Node {
             .filter(|(_, peer)| !peer.is_inbounds())
             .map(|(_, peer)| peer)
             .collect()
+    }
+
+    fn sent_outbound_inv(&mut self) {
+        self.out_fanout_count.0 += 1;
+    }
+
+    pub fn received_outbound_inv(&mut self) {
+        self.out_fanout_count.1 += 1;
+    }
+
+    fn get_outbound_fanout_count(&self) -> u16 {
+        self.out_fanout_count.0 + self.out_fanout_count.1
     }
 
     /// Connects to a given peer. This method is used by the simulator to connect nodes between them
@@ -400,19 +417,14 @@ impl Node {
             * *INBOUND_FANOUT_DESTINATIONS_FRACTION)
             .round() as usize;
 
-        // In the real Bitcoin code, we perform a fancy ordering of the peers based on the transaction id that we want to send and the
-        // peer_ids in our neighbourhood to obtain a deterministically random sorting from where we can pick our fanout peers.
-        // In the simulator, we can make this way simpler, we only care about the ordering being deterministically random, and different
-        // for multiples runs of the same simulation. This can be achieved by simply randomly sorting our peers using our pre-seeded rng.
-        self.fanout_targets.extend(
-            self.get_outbound_peer_ids()
-                .choose_multiple(&mut *borrowed_rng, *OUTBOUND_FANOUT_THRESHOLD),
-        );
-
+        // In the actual implementation, inbound fanout targets are randomly selected for a window of time and rotated periodically
+        // Here, as a simplification, we can sample them at random once, given we simulate a single transaction
         self.fanout_targets.extend(
             self.get_inbound_peer_ids()
                 .choose_multiple(&mut *borrowed_rng, inbound_target_count),
         );
+
+        // Fanout outbounds will be selected later on based on the number of fanout we have already performed
     }
 
     /// Whether we should fanout the given transaction to the given peer.
@@ -420,11 +432,18 @@ impl Node {
     /// for now, so there are no fanout_tx_relay peers if Erlay is supported
     fn should_fanout_to(&self, peer_id: &NodeId) -> bool {
         // For non-erlay peers, we always fanout
-        if !self.get_peer(peer_id).unwrap().is_erlay() {
+        let peer = self.get_peer(peer_id).unwrap();
+        if !peer.is_erlay() {
             return true;
         }
 
-        self.fanout_targets.contains(peer_id)
+        if peer.is_inbounds() {
+            // Inbound targets are selected when the transaction is received
+            self.fanout_targets.contains(peer_id)
+        } else {
+            // For Erlay outbounds, we pick them based on when their timers go off, until we reach the desired threshold
+            self.get_outbound_fanout_count() as u64 <= *OUTBOUND_FANOUT_THRESHOLD as u64
+        }
     }
 
     /// Schedules a transaction announcement to be processed at a future time.
@@ -734,6 +753,10 @@ impl Node {
                         Event::receive_message_from(self.node_id, peer_id, msg),
                         request_time,
                     ));
+
+                    if !is_peer_inbounds {
+                        self.sent_outbound_inv();
+                    }
                 }
                 NetworkMessage::GETDATA => {
                     assert!(
@@ -864,6 +887,11 @@ impl Node {
                         self.get_peer_mut(&peer_id)
                             .unwrap()
                             .add_tx_announcement(TxAnnouncement::Received);
+
+                        if !is_peer_inbounds {
+                            self.received_outbound_inv();
+                        }
+
                         // We only request transactions that we don't know about
                         if self.knows_transaction() {
                             debug_log!(request_time, self.node_id, "Already known transaction");
@@ -1234,6 +1262,10 @@ mod test_node {
             node.connect(*peer_id, true);
         }
 
+        // The outbound receive count for originators unreachable originators always starts at one
+        // to prevent tx probing
+        node.received_outbound_inv();
+
         // For Erlay peers, transactions are added flagged to_be_announced or added to the peer's reconciliation set
         // depending on whether or not the peer is selected for fanout. The decision making is performed by
         // should_fanout_to. Here, inbound and outbound peers only change the likelihood of being selected
@@ -1251,6 +1283,7 @@ mod test_node {
                 assert!(node.get_peer(&dst).unwrap().to_be_announced());
                 if node.should_fanout_to(&dst) {
                     fanout_count += 1;
+                    node.sent_outbound_inv();
                 } else {
                     reconciliation_count += 1;
                     // Transactions are not yet placed in the reconciliation set.
@@ -1423,8 +1456,9 @@ mod test_node {
         // nothing for those who were selected for reconciliation (for the later, however, the transaction is added to
         // their reconciliation sets)
         for peer_id in out_peer_ids.iter() {
+            let is_fanout_target = node.should_fanout_to(peer_id);
             let result = node.process_scheduled_announcement(*peer_id, current_time);
-            if node.fanout_targets.contains(peer_id) {
+            if is_fanout_target {
                 assert_eq!(result.len(), 1);
                 assert!(matches!(result[0].inner, Event::ReceiveMessageFrom(..)));
                 assert!(result[0].inner.get_message().unwrap().is_inv());

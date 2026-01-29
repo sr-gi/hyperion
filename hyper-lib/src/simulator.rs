@@ -62,7 +62,7 @@ impl Event {
     }
 }
 
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq, Debug)]
 pub struct ScheduledEvent {
     pub inner: Event,
     time: Reverse<u64>,
