@@ -146,7 +146,6 @@ pub struct Network {
     // Links between nodes, with their associated latencies
     links: HashMap<Link, u64>,
     network_latency: bool,
-    is_erlay: bool,
     reachable_count: usize,
 }
 
@@ -160,11 +159,11 @@ impl Network {
         rng: Rc<RefCell<StdRng>>,
     ) -> Self {
         let mut reachable_nodes = (0..reachable_count)
-            .map(|i| Node::new(i, rng.clone(), true, is_erlay))
+            .map(|i| Node::new(i, rng.clone(), true))
             .collect::<Vec<_>>();
         let mut unreachable_nodes: Vec<Node> = (reachable_count
             ..reachable_count + unreachable_count)
-            .map(|i| Node::new(i, rng.clone(), false, is_erlay))
+            .map(|i| Node::new(i, rng.clone(), false))
             .collect::<Vec<_>>();
 
         log::info!(
@@ -232,13 +231,9 @@ impl Network {
             nodes,
             links,
             network_latency,
-            is_erlay,
+
             reachable_count,
         }
-    }
-
-    pub fn is_erlay(&self) -> bool {
-        self.is_erlay
     }
 
     /// Connects a collection of unreachable nodes to a collection of reachable ones.

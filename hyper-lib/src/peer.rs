@@ -6,9 +6,8 @@ pub(crate) enum TxAnnouncement {
     Sent,
     // We received the announcement
     Received,
-    // The announcement is scheduled. [is_stale] flags whether this scheduling has become
-    // stale (by having requested the relevant transaction via reconciliation already)
-    Scheduled(/*is_stale*/ bool),
+    // The announcement is scheduled.
+    Scheduled,
     // No announcement has been exchanged
     None,
 }
@@ -61,7 +60,7 @@ impl Peer {
     }
 
     pub(crate) fn to_be_announced(&self) -> bool {
-        matches!(self.tx_announcement, TxAnnouncement::Scheduled(false))
+        matches!(self.tx_announcement, TxAnnouncement::Scheduled)
     }
 
     pub(crate) fn add_tx_announcement(&mut self, tx_announcement: TxAnnouncement) {
@@ -74,15 +73,7 @@ impl Peer {
 
     pub(crate) fn schedule_tx_announcement(&mut self) {
         assert!(matches!(self.tx_announcement, TxAnnouncement::None));
-        self.tx_announcement = TxAnnouncement::Scheduled(false);
-    }
-
-    pub(crate) fn flag_as_stale(&mut self) {
-        assert!(matches!(
-            self.tx_announcement,
-            TxAnnouncement::Scheduled(false)
-        ));
-        self.tx_announcement = TxAnnouncement::Scheduled(true);
+        self.tx_announcement = TxAnnouncement::Scheduled;
     }
 
     pub(crate) fn is_erlay(&self) -> bool {
@@ -171,7 +162,7 @@ mod test_peer {
         assert!(erlay_peer.already_announced());
         assert!(erlay_peer.they_announced_tx());
 
-        // If an erlay peer has a transaction on their pending to be reconciled (either delayed or on the set)
+        // If an erlay peer has a transaction on their pending to be reconciled (either delayed or in the set)
         // and we add it to announced, it will be removed from reconciliation
         erlay_peer.reset();
         erlay_peer.add_tx_to_reconcile();
