@@ -143,32 +143,30 @@ impl Simulator {
     }
 
     pub fn schedule_set_reconciliation(&mut self, current_time: u64) {
-        if self.network.is_erlay() {
-            for node in self.network.get_nodes_mut() {
-                // Schedule transaction reconciliation here. As opposite to fanout, reconciliation is scheduled
-                // on a fixed interval. This means that we need to start it when the connection is made. However,
-                // in the simulator, the whole network is build at the same (discrete) time. This does not follow
-                // reality, so we will pick a random value between the simulation start time (current_time) and
-                // RECON_REQUEST_INTERVAL as the first scheduled reconciliation for each connection.
-                let start_time = current_time
-                    + self
-                        .rng
-                        .borrow_mut()
-                        .random_range(0..RECON_REQUEST_INTERVAL * SECS_TO_NANOS);
+        for node in self.network.get_nodes_mut() {
+            // Schedule transaction reconciliation here. As opposite to fanout, reconciliation is scheduled
+            // on a fixed interval. This means that we need to start it when the connection is made. However,
+            // in the simulator, the whole network is build at the same (discrete) time. This does not follow
+            // reality, so we will pick a random value between the simulation start time (current_time) and
+            // RECON_REQUEST_INTERVAL as the first scheduled reconciliation for each connection.
+            let start_time = current_time
+                + self
+                    .rng
+                    .borrow_mut()
+                    .random_range(0..RECON_REQUEST_INTERVAL * SECS_TO_NANOS);
 
-                // Make it so we reconcile with all peers every RECON_REQUEST_INTERVAL
-                let outbound_peers = node.get_outbound_peer_ids();
-                let delta = ((RECON_REQUEST_INTERVAL as f64 / outbound_peers.len() as f64)
-                    * SECS_TO_NANOS as f64)
-                    .round() as u64;
+            // Make it so we reconcile with all peers every RECON_REQUEST_INTERVAL
+            let outbound_peers = node.get_outbound_peer_ids();
+            let delta = ((RECON_REQUEST_INTERVAL as f64 / outbound_peers.len() as f64)
+                * SECS_TO_NANOS as f64)
+                .round() as u64;
 
-                for (i, peer_id) in outbound_peers.iter().enumerate() {
-                    // Schedule interleaved reconciliation. All outbound peers are reconciled every RECON_REQUEST_INTERVAL, with a
-                    // RECON_REQUEST_INTERVAL/N step, where N is the number of outbound peers
-                    self.event_queue.push(
-                        node.schedule_set_reconciliation(peer_id, start_time + (delta * i as u64)),
-                    );
-                }
+            for (i, peer_id) in outbound_peers.iter().enumerate() {
+                // Schedule interleaved reconciliation. All outbound peers are reconciled every RECON_REQUEST_INTERVAL, with a
+                // RECON_REQUEST_INTERVAL/N step, where N is the number of outbound peers
+                self.event_queue.push(
+                    node.schedule_set_reconciliation(peer_id, start_time + (delta * i as u64)),
+                );
             }
         }
     }

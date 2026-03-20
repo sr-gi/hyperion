@@ -69,7 +69,10 @@ fn main() -> anyhow::Result<()> {
         // Bootstrap the set reconciliation events (if needed) and send out the transaction.
         // All simulations start at time 0 so we don't have to carry any offset when computing
         // the overall time
-        simulator.schedule_set_reconciliation(start_time);
+        if cli.erlay {
+            simulator.schedule_set_reconciliation(start_time);
+        }
+
         for e in simulator
             .get_node_mut(source_node_id)
             .unwrap()
