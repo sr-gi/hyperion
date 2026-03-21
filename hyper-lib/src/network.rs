@@ -7,6 +7,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use rand::rngs::StdRng;
+use rand::seq::index;
 use rand_distr::{Distribution, LogNormal, Uniform};
 use std::collections::{HashMap, HashSet};
 
@@ -173,7 +174,6 @@ impl Network {
             unreachable_count
         );
 
-        let peers_die = Uniform::new(0, reachable_nodes.len()).unwrap();
         let mut borrowed_rng = rng.borrow_mut();
 
         log::info!(
@@ -186,7 +186,6 @@ impl Network {
             outbounds_count,
             is_erlay,
             &mut borrowed_rng,
-            &peers_die,
         );
 
         log::info!(
@@ -198,7 +197,6 @@ impl Network {
             outbounds_count,
             is_erlay,
             &mut borrowed_rng,
-            &peers_die,
         ));
 
         log::info!(
@@ -236,22 +234,27 @@ impl Network {
         }
     }
 
-    /// Connects a collection of unreachable nodes to a collection of reachable ones.
-    /// A given pair of nodes will have, at most, one connection between them.
-    /// Nodes to be connected to are picked at random given an uniform distribution [dist]
+    /// Connects a collection of unreachable nodes to a collection of reachable nodes.
+    /// Each unreachable node will have exactly [outbounds_count] outbound connections.
+    /// Nodes to be connected to are picked at random using [index::sample].
     fn connect_unreachable(
         unreachable_nodes: &mut [Node],
         reachable_nodes: &mut [Node],
         outbounds_count: usize,
         are_erlay: bool,
         rng: &mut StdRng,
-        dist: &Uniform<NodeId>,
     ) -> Vec<Link> {
-        let mut links = Vec::new();
+        assert!(
+            outbounds_count <= reachable_nodes.len(),
+            "outbounds_count ({outbounds_count}) exceeds number of reachable nodes ({})",
+            reachable_nodes.len()
+        );
+
+        let mut links = Vec::with_capacity(unreachable_nodes.len() * outbounds_count);
+
         for node in unreachable_nodes.iter_mut() {
-            let mut already_connected_to = HashSet::new();
-            for _ in 0..outbounds_count {
-                let peer_id = Network::get_peer_to_connect(&mut already_connected_to, rng, dist);
+            // This works because reachable nodes are assigned first, so their ids go from [0...reachable_nodes.len())
+            for peer_id in index::sample(rng, reachable_nodes.len(), outbounds_count).into_iter() {
                 node.connect(peer_id, are_erlay);
                 reachable_nodes
                     .get_mut(peer_id)
@@ -262,20 +265,29 @@ impl Network {
                 links.push((node.get_id(), peer_id).into());
             }
         }
+
         links
     }
 
     /// Connects a collection of reachable nodes between them.
     /// A given pair of nodes will have, at most, one connection between them.
-    /// Nodes to be connected to are picked at random given an uniform distribution [dist]
+    /// Nodes to be connected to are picked at random using an uniform distribution over the reachable nodes ids
     fn connect_reachable(
         reachable_nodes: &mut [Node],
         outbounds_count: usize,
         are_erlay: bool,
         rng: &mut StdRng,
-        dist: &Uniform<NodeId>,
     ) -> Vec<Link> {
-        let mut links = Vec::new();
+        assert!(
+            outbounds_count < reachable_nodes.len(),
+            "outbounds_count ({outbounds_count}) exceeds number of connectable reachable nodes ({})",
+            reachable_nodes.len() - 1
+        );
+
+        let mut links = Vec::with_capacity(reachable_nodes.len() * outbounds_count);
+        // Create our peer die such that it only selects reachable peer ids
+        let peers_die = Uniform::new(0, reachable_nodes.len()).unwrap();
+
         for node_id in 0..reachable_nodes.len() {
             let mut already_connected_to =
                 HashSet::from_iter(reachable_nodes[node_id].get_inbound_peer_ids());
@@ -283,8 +295,11 @@ impl Network {
             already_connected_to.insert(node_id);
 
             for _ in 0..outbounds_count {
-                let peer_id = Network::get_peer_to_connect(&mut already_connected_to, rng, dist);
+                let peer_id =
+                    Network::get_peer_to_connect(&mut already_connected_to, rng, &peers_die);
 
+                // Rust does not allow two mutable borrows into the same slice simultaneously.
+                // Split the slice at the higher index so both node and peer fall in different halves.
                 let (node, peer) = if peer_id < node_id {
                     let (r1, r2) = reachable_nodes.split_at_mut(node_id);
                     let peer = &mut r1[peer_id];
