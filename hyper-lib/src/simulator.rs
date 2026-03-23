@@ -114,8 +114,8 @@ impl Simulator {
     pub fn new(
         reachable_count: usize,
         unreachable_count: usize,
-        outbounds_count: usize,
-        is_erlay: bool,
+        fanout_outbounds_count: usize,
+        erlay_outbounds_count: Option<usize>,
         seed: &mut Option<u64>,
         network_latency: bool,
     ) -> Self {
@@ -129,9 +129,9 @@ impl Simulator {
         let network = Network::new(
             reachable_count,
             unreachable_count,
-            outbounds_count,
+            fanout_outbounds_count,
+            erlay_outbounds_count,
             network_latency,
-            is_erlay,
             rng.clone(),
         );
 
@@ -155,15 +155,15 @@ impl Simulator {
                     .borrow_mut()
                     .random_range(0..RECON_REQUEST_INTERVAL * SECS_TO_NANOS);
 
-            // Make it so we reconcile with all peers every RECON_REQUEST_INTERVAL
-            let outbound_peers = node.get_outbound_peer_ids();
-            let delta = ((RECON_REQUEST_INTERVAL as f64 / outbound_peers.len() as f64)
+            // Make it so we reconcile with all erlay peers every RECON_REQUEST_INTERVAL
+            let outbound_erlay_peers = node.get_erlay_outbound_peer_ids();
+            let delta = ((RECON_REQUEST_INTERVAL as f64 / outbound_erlay_peers.len() as f64)
                 * SECS_TO_NANOS as f64)
                 .round() as u64;
 
-            for (i, peer_id) in outbound_peers.iter().enumerate() {
-                // Schedule interleaved reconciliation. All outbound peers are reconciled every RECON_REQUEST_INTERVAL, with a
-                // RECON_REQUEST_INTERVAL/N step, where N is the number of outbound peers
+            for (i, peer_id) in outbound_erlay_peers.iter().enumerate() {
+                // Schedule interleaved reconciliation. All erlay outbound peers are reconciled every RECON_REQUEST_INTERVAL, with a
+                // RECON_REQUEST_INTERVAL/N step, where N is the number of erlay outbounds
                 self.event_queue.push(
                     node.schedule_set_reconciliation(peer_id, start_time + (delta * i as u64)),
                 );

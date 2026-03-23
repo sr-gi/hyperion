@@ -25,7 +25,11 @@ fn main() -> anyhow::Result<()> {
         cli.reachable,
         cli.unreachable,
         cli.outbounds,
-        cli.erlay,
+        if cli.erlay {
+            Some(cli.erlay_outbounds)
+        } else {
+            None
+        },
         &mut cli.seed,
         !cli.no_latency,
     );

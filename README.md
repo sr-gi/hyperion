@@ -39,7 +39,9 @@ Options:
   -u, --unreachable <UNREACHABLE>
           The number of unreachable nodes in the simulated network [default: 100000]
   -o, --outbounds <OUTBOUNDS>
-          The number of outbound connections established per node [default: 8]
+          The number of fanout outbound connections established per node [default: 8]
+  -e, --erlay-outbounds <ERLAY_OUTBOUNDS>
+          The number of reconciliation outbound connections established per node [default: 4]
   -l, --log-level <LOG_LEVEL>
           Level of verbosity of the messages displayed by the simulator.
           Possible values: [off, error, warn, info, debug, trace] [default: info]
@@ -54,7 +56,7 @@ Options:
   -n <N>
           Number of times the simulation will be repeated. Smooths the statistical results [default: 1]
       --output-file <OUTPUT_FILE>
-          The path to an output file where to store simulation results to, in csv.
+          An output file name where to store simulation results to, in csv.
           If the file already exists, data will be appended to it, otherwise it will be created [aliases: out]
   -h, --help
           Print help
