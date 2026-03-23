@@ -12,6 +12,7 @@ pub mod statistics;
 pub mod txreconciliation;
 
 pub const MAX_OUTBOUND_CONNECTIONS: usize = 8;
+pub const MAX_ERLAY_OUTBOUND_CONNECTIONS: usize = 4;
 static SECS_TO_NANOS: u64 = 1_000_000_000;
 
 pub struct SimulationParameters {

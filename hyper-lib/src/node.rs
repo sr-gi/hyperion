@@ -165,6 +165,14 @@ impl Node {
             .collect()
     }
 
+    pub fn get_erlay_outbound_peer_ids(&self) -> Vec<NodeId> {
+        self.peers
+            .iter()
+            .filter(|(_, peer)| !peer.is_inbounds() && peer.is_erlay())
+            .map(|(peer_id, _)| *peer_id)
+            .collect()
+    }
+
     pub fn get_inbound_peers(&self) -> Vec<&Peer> {
         self.peers
             .iter()
