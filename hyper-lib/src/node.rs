@@ -29,7 +29,7 @@ pub(crate) static OUTBOUND_INVENTORY_BROADCAST_INTERVAL: Lazy<u64> = Lazy::new(|
 });
 
 static NONPREF_PEER_TX_DELAY: u64 = 2;
-pub(crate) static RECON_REQUEST_INTERVAL: u64 = 8;
+pub(crate) static RECON_REQUEST_INTERVAL: u64 = 30;
 
 macro_rules! debug_log {
     ($time:tt, $id:expr, $($arg:tt)*)

@@ -18,7 +18,7 @@ The transaction relaying logic follows Bitcoin Core's design:
     - For inbounds, the delay follows a Poisson process with an expected value of `INBOUND_INVENTORY_BROADCAST_INTERVAL(5s)`. All inbounds are on the same timer
     - For outbounds, the delay follows a Poisson process with an expected value of `OUTBOUND_INVENTORY_BROADCAST_INTERVAL(2s)`. Every outbound has a unique timer
 - `GETDATA`s are prioritized to outbound peers, hence if an inbound peer announces a transaction, the request will be delayed by `NONPREF_PEER_TX_DELAY(2s)`, and superseded by any other request by an outbound peer<sup>1</sup>
-- `REQRECON` messages are sent on a fix timer, in a round-robin fashion every `RECON_REQUEST_INTERVAL(8s)`, meaning each request will go out every `8/n`s where `n` is the outbound peer count of the node
+- `REQRECON` messages are sent on a fix timer, in a round-robin fashion every `RECON_REQUEST_INTERVAL(30s)`, meaning each request will go out every `30/n`s where `n` is the outbound peer count of the node
 - `SKETCH`es exchanged between peers contain transactions as long as those would have been requestable by the peer at the time of sharing the sketch (this means if an `INV` containing such transaction would have been created)
 
 All messages exchanged between peers are added some network latency, which is sampled at random from a Log Normal distribution with expected value of `10ms` and variance of `2ms`.
