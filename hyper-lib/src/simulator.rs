@@ -14,11 +14,11 @@ use crate::SECS_TO_NANOS;
 /// An enumeration of all the events that can be created in a simulation
 #[derive(Clone, Hash, Eq, PartialEq, Debug)]
 pub enum Event {
-    /// The destination (0) receives a new message (2) from given source (1)
+    /// The destination (1) receives a new message (2) from given source (0)
     ReceiveMessageFrom(NodeId, NodeId, NetworkMessage),
     /// A given node (0) processes an scheduled announcements to a given peer (1)
     ProcessScheduledAnnouncement(NodeId, NodeId),
-    /// A given node (0) processed a delayed request of a give transaction (1)
+    /// A given node (0) processed a delayed request of the simulated transaction from a given peer (1)
     ProcessDelayedRequest(NodeId, NodeId),
     /// Processes a scheduled reconciliation on the given node (0) with a given peer (1)
     ProcessScheduledReconciliation(NodeId, NodeId),
@@ -108,9 +108,6 @@ pub struct Simulator {
     pub network: Network,
     /// A queue of the events that make the simulation, ordered by discrete time
     event_queue: BinaryHeap<ScheduledEvent>,
-    /// A cached random node identifier, initialized before the network is computed and
-    /// re-written every time get_random_nodeid is called
-    cached_node_id: NodeId,
 }
 
 impl Simulator {
@@ -129,10 +126,6 @@ impl Simulator {
             log::info!("Using fresh rng seed: {}", seed.unwrap());
         };
         let rng = Rc::new(RefCell::new(StdRng::seed_from_u64(seed.unwrap())));
-        let random_node_id = rng
-            .borrow_mut()
-            .random_range(0..reachable_count + unreachable_count);
-
         let network = Network::new(
             reachable_count,
             unreachable_count,
@@ -146,7 +139,6 @@ impl Simulator {
             rng,
             network,
             event_queue: BinaryHeap::new(),
-            cached_node_id: random_node_id,
         }
     }
 
@@ -165,12 +157,12 @@ impl Simulator {
                         .random_range(0..RECON_REQUEST_INTERVAL * SECS_TO_NANOS);
 
                 // Make it so we reconcile with all peers every RECON_REQUEST_INTERVAL
-                let outbound_peers = node.get_outbounds();
+                let outbound_peers = node.get_outbound_peer_ids();
                 let delta = ((RECON_REQUEST_INTERVAL as f64 / outbound_peers.len() as f64)
                     * SECS_TO_NANOS as f64)
                     .round() as u64;
 
-                for (i, peer_id) in outbound_peers.keys().enumerate() {
+                for (i, peer_id) in outbound_peers.iter().enumerate() {
                     // Schedule interleaved reconciliation. All outbound peers are reconciled every RECON_REQUEST_INTERVAL, with a
                     // RECON_REQUEST_INTERVAL/N step, where N is the number of outbound peers
                     self.event_queue.push(
@@ -200,6 +192,12 @@ impl Simulator {
         self.event_queue.push(scheduled_event);
     }
 
+    pub fn add_events(&mut self, scheduled_events: Vec<ScheduledEvent>) {
+        for scheduled_event in scheduled_events {
+            self.add_event(scheduled_event);
+        }
+    }
+
     /// Get the next event to be processed, as in the one with the smallest discrete time
     pub fn get_next_event(&mut self) -> Option<ScheduledEvent> {
         self.event_queue.pop()
@@ -212,12 +210,9 @@ impl Simulator {
     }
 
     pub fn get_random_nodeid(&mut self) -> NodeId {
-        let random_node_id = self.cached_node_id;
-        self.cached_node_id = self
-            .rng
+        self.rng
             .borrow_mut()
-            .random_range(0..self.network.get_node_count());
-        random_node_id
+            .random_range(0..self.network.get_node_count())
     }
 
     pub fn get_node(&self, node_id: NodeId) -> Option<&Node> {
