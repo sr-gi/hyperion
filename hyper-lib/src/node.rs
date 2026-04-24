@@ -5,13 +5,12 @@ use std::rc::Rc;
 
 use once_cell::sync::Lazy;
 use rand::rngs::StdRng;
-use rand::seq::IndexedRandom;
 use rand_distr::{Distribution, Exp};
 
 use crate::network::NetworkMessage;
+use crate::peer::{Peer, TxAnnouncement};
 use crate::simulator::{Event, ScheduledEvent};
 use crate::statistics::NodeStatistics;
-use crate::txreconciliation::TxReconciliationState;
 use crate::SECS_TO_NANOS;
 
 pub type NodeId = usize;
@@ -29,21 +28,8 @@ pub(crate) static OUTBOUND_INVENTORY_BROADCAST_INTERVAL: Lazy<u64> = Lazy::new(|
         .unwrap_or(2)
 });
 
-pub(crate) static OUTBOUND_FANOUT_DESTINATIONS: Lazy<usize> = Lazy::new(|| {
-    env::var("OUTBOUND_FANOUT_DESTINATIONS")
-        .ok()
-        .and_then(|val| val.parse::<usize>().ok())
-        .unwrap_or(1)
-});
-pub(crate) static INBOUND_FANOUT_DESTINATIONS_FRACTION: Lazy<f64> = Lazy::new(|| {
-    env::var("INBOUND_FANOUT_DESTINATIONS_FRACTION")
-        .ok()
-        .and_then(|val| val.parse::<f64>().ok())
-        .unwrap_or(0.1)
-});
-
 static NONPREF_PEER_TX_DELAY: u64 = 2;
-pub(crate) static RECON_REQUEST_INTERVAL: u64 = 8;
+pub(crate) static RECON_REQUEST_INTERVAL: u64 = 30;
 
 macro_rules! debug_log {
     ($time:tt, $id:expr, $($arg:tt)*)
@@ -51,7 +37,7 @@ macro_rules! debug_log {
     (log::debug!("{}: [Node: {}] {}", $time, $id, &format!($($arg)*)));
 }
 
-/// A discrete timer over a poisson distribution. Used to decide when to
+/// A discrete timer over a poisson process. Used to decide when to
 /// announce transactions to peers
 #[derive(Clone)]
 struct PoissonTimer {
@@ -74,115 +60,6 @@ impl PoissonTimer {
     }
 }
 
-#[derive(Clone, PartialEq)]
-enum TxAnnouncement {
-    // We sent the announcement
-    Sent,
-    // We received the announcement
-    Received,
-    // The announcement is scheduled. [is_stale] flags whether this scheduling has become
-    // stale (by having requested the relevant transaction via reconciliation already)
-    Scheduled(/*is_stale*/ bool),
-    // No announcement has been exchanged
-    None,
-}
-
-/// A minimal abstraction of a peer
-#[derive(Clone)]
-pub struct Peer {
-    /// Whether this peer started the connection, or we did
-    is_inbounds: bool,
-    /// Whether the simulated transaction has been announced to/by this peer
-    tx_announcement: TxAnnouncement,
-    /// Transaction reconciliation related data for peers that support Erlay
-    tx_reconciliation_state: Option<TxReconciliationState>,
-}
-
-impl Peer {
-    fn new(is_erlay: bool, is_inbounds: bool) -> Self {
-        let tx_reconciliation_state = if is_erlay {
-            // Connection initiators match reconciliation initiators
-            // https://github.com/bitcoin/bips/blob/master/bip-0330.mediawiki#sendtxrcncl
-            Some(TxReconciliationState::new(is_inbounds))
-        } else {
-            None
-        };
-        Self {
-            is_inbounds,
-            tx_announcement: TxAnnouncement::None,
-            tx_reconciliation_state,
-        }
-    }
-
-    /// Reset the peer state so a new round of the simulation can be run from a clean state
-    pub fn reset(&mut self) {
-        self.tx_announcement = TxAnnouncement::None;
-        if let Some(recon_state) = self.get_tx_reconciliation_state_mut() {
-            recon_state.clear();
-        }
-    }
-
-    pub fn they_announced_tx(&self) -> bool {
-        matches!(self.tx_announcement, TxAnnouncement::Received)
-    }
-
-    pub fn we_announced_tx(&self) -> bool {
-        matches!(self.tx_announcement, TxAnnouncement::Sent)
-    }
-
-    pub fn already_announced(&self) -> bool {
-        self.they_announced_tx() || self.we_announced_tx()
-    }
-
-    pub fn to_be_announced(&self) -> bool {
-        matches!(self.tx_announcement, TxAnnouncement::Scheduled(false))
-    }
-
-    fn add_tx_announcement(&mut self, tx_announcement: TxAnnouncement) {
-        assert!(!self.already_announced());
-        self.tx_announcement = tx_announcement;
-        if let Some(recon_state) = self.get_tx_reconciliation_state_mut() {
-            recon_state.remove_tx();
-        }
-    }
-
-    fn schedule_tx_announcement(&mut self) {
-        assert!(matches!(self.tx_announcement, TxAnnouncement::None));
-        self.tx_announcement = TxAnnouncement::Scheduled(false);
-    }
-
-    fn flag_as_stale(&mut self) {
-        assert!(matches!(
-            self.tx_announcement,
-            TxAnnouncement::Scheduled(false)
-        ));
-        self.tx_announcement = TxAnnouncement::Scheduled(true);
-    }
-
-    fn is_erlay(&self) -> bool {
-        self.tx_reconciliation_state.is_some()
-    }
-
-    fn is_inbounds(&self) -> bool {
-        self.is_inbounds
-    }
-
-    fn add_tx_to_reconcile(&mut self) -> bool {
-        self.tx_reconciliation_state
-            .as_mut()
-            .map(|recon_set| recon_set.add_tx())
-            .unwrap_or(false)
-    }
-
-    fn get_tx_reconciliation_state(&self) -> Option<&TxReconciliationState> {
-        self.tx_reconciliation_state.as_ref()
-    }
-
-    fn get_tx_reconciliation_state_mut(&mut self) -> Option<&mut TxReconciliationState> {
-        self.tx_reconciliation_state.as_mut()
-    }
-}
-
 /// A node is the main unit of the simulator. It represents an abstractions of a Bitcoin node and
 /// stores all the data required to simulate sending and receiving the simulated transaction
 #[derive(Clone)]
@@ -193,10 +70,10 @@ pub struct Node {
     rng: Rc<RefCell<StdRng>>,
     /// Whether the node is reachable or not
     is_reachable: bool,
-    /// Whether the node supports Erlay or not
-    is_erlay: bool,
     /// Map of peers identified by their (global) node identifier
     peers: BTreeMap<NodeId, Peer>,
+    /// FIXME: We may want to merge requested_tx and known_tx into a single enum, maybe even add delayed_request
+    /// and call it tx_status or something like that
     /// Whether the transaction has been requested (but not yet received)
     requested_transaction: bool,
     /// Whether a request for the simulated transaction has been delayed (see [Node::add_request])
@@ -207,31 +84,22 @@ pub struct Node {
     inbounds_poisson_timer: PoissonTimer,
     /// Map of poisson timers for outbound peers. Used to decide when to announce transactions to each of them
     outbounds_poisson_timer: PoissonTimer,
-    /// Keeps track of the fanout targets for each round of the simulation. Selected at transaction scheduling and used when broadcasting
-    fanout_targets: Vec<NodeId>,
-    /// Amount of messages of each time the node has sent/received
+    /// Amount of messages of each type the node has sent/received
     node_statistics: NodeStatistics,
 }
 
 impl Node {
-    pub fn new(
-        node_id: NodeId,
-        rng: Rc<RefCell<StdRng>>,
-        is_reachable: bool,
-        is_erlay: bool,
-    ) -> Self {
+    pub fn new(node_id: NodeId, rng: Rc<RefCell<StdRng>>, is_reachable: bool) -> Self {
         Node {
             node_id,
             rng,
             is_reachable,
-            is_erlay,
             peers: BTreeMap::new(),
             requested_transaction: false,
             delayed_request: None,
             known_transaction: false,
             inbounds_poisson_timer: PoissonTimer::new(*INBOUND_INVENTORY_BROADCAST_INTERVAL),
             outbounds_poisson_timer: PoissonTimer::new(*OUTBOUND_INVENTORY_BROADCAST_INTERVAL),
-            fanout_targets: Vec::new(),
             node_statistics: NodeStatistics::new(),
         }
     }
@@ -244,7 +112,6 @@ impl Node {
         self.requested_transaction = false;
         self.delayed_request = None;
         self.known_transaction = false;
-        self.fanout_targets.clear();
 
         for peer in self.peers.values_mut() {
             peer.reset();
@@ -298,6 +165,14 @@ impl Node {
             .collect()
     }
 
+    pub fn get_erlay_outbound_peer_ids(&self) -> Vec<NodeId> {
+        self.peers
+            .iter()
+            .filter(|(_, peer)| !peer.is_inbounds() && peer.is_erlay())
+            .map(|(peer_id, _)| *peer_id)
+            .collect()
+    }
+
     pub fn get_inbound_peers(&self) -> Vec<&Peer> {
         self.peers
             .iter()
@@ -317,10 +192,6 @@ impl Node {
     /// Connects to a given peer. This method is used by the simulator to connect nodes between them
     /// alongside its counterpart [Node::accept_connection]
     pub fn connect(&mut self, peer_id: NodeId, is_erlay: bool) {
-        if is_erlay {
-            assert!(self.is_erlay, "We are trying to stablish an Erlay connection with node {peer_id}, but we don't support Erlay");
-        }
-
         let already_connected = self
             .peers
             .insert(peer_id, Peer::new(is_erlay, /*is_inbounds=*/ false));
@@ -336,9 +207,6 @@ impl Node {
     /// Accept a connection from a given peer. This method is used by the simulator to connect nodes between them
     /// alongside its counterpart [Node::connect]
     pub fn accept_connection(&mut self, peer_id: NodeId, is_erlay: bool) {
-        if is_erlay {
-            assert!(self.is_erlay, "Node {peer_id} is trying to stablish an Erlay connection with us, but we don't support it");
-        }
         assert!(
             self.is_reachable,
             "Node {peer_id} tried to connect to us (node_id: {}), but we are not reachable",
@@ -382,53 +250,11 @@ impl Node {
         &self.node_statistics
     }
 
-    /// Chooses a subset of our peers as fanout targets for the simulated transaction
-    fn choose_fanout_targets(&mut self) {
-        // Shortcut if we are not Erlay.
-        if !self.is_erlay {
-            return;
-        }
-
-        let mut borrowed_rng = self.rng.borrow_mut();
-        let inbound_target_count = (self.get_inbound_peer_ids().len() as f64
-            * *INBOUND_FANOUT_DESTINATIONS_FRACTION)
-            .round() as usize;
-
-        // In the real Bitcoin code, we perform a fancy ordering of the peers based on the transaction id that we want to send and the
-        // peer_ids in our neighbourhood to obtain a deterministically random sorting from where we can pick our fanout peers.
-        // In the simulator, we can make this way simpler, we only care about the ordering being deterministically random, and different
-        // for multiples runs of the same simulation. This can be achieved by simply randomly sorting our peers using our pre-seeded rng.
-        self.fanout_targets.extend(
-            self.get_outbound_peer_ids()
-                .choose_multiple(&mut *borrowed_rng, *OUTBOUND_FANOUT_DESTINATIONS),
-        );
-
-        self.fanout_targets.extend(
-            self.get_inbound_peer_ids()
-                .choose_multiple(&mut *borrowed_rng, inbound_target_count),
-        );
-    }
-
-    /// Whether we should fanout the given transaction to the given peer.
-    /// Assume that Erlay support is a boolean flag for all nodes in the simulation
-    /// for now, so there are no fanout_tx_relay peers if Erlay is supported
-    fn should_fanout_to(&self, peer_id: &NodeId) -> bool {
-        // For non-erlay peers, we always fanout
-        if !self.get_peer(peer_id).unwrap().is_erlay() {
-            return true;
-        }
-
-        self.fanout_targets.contains(peer_id)
-    }
-
     /// Schedules a transaction announcement to be processed at a future time.
     /// We are initializing the transaction's originator interval sampling here. This is because we don't want to start
     /// sampling until we have something to send to our peers. Otherwise we would create useless events just for sampling.
     /// Notice this works since a Poisson process is memoryless hence past events do not affect future ones.
     fn schedule_tx_announcement(&mut self, current_time: u64) -> Vec<ScheduledEvent> {
-        // First, we selected the subset of peers that will be picked for fanout
-        self.choose_fanout_targets();
-
         // Collect peer IDs to avoid holding an immutable borrow while mutating self
         let peer_ids = self.peers.keys().copied().collect::<Vec<_>>();
 
@@ -442,12 +268,6 @@ impl Node {
                     return None;
                 }
 
-                // TODO: Depending on when we respond to reconciliation requests, we could add data to reconciliation
-                // sets for inbound peers here (e.g. if we only respond to the after trickling, we make sure not to leak
-                // data prematurely). This can make the simulator more efficient, since we can reduce the number of push/pops
-                // from the event list.
-                // For now, reconciliation is being responded when the request is received, so all needs to be though tx_announcement
-                // to make sure the delays are met.
                 peer.schedule_tx_announcement();
                 let is_inbounds = peer.is_inbounds();
                 let next_interval = self.get_next_announcement_time(current_time, is_inbounds);
@@ -468,8 +288,8 @@ impl Node {
             .collect()
     }
 
-    /// Kickstarts the broadcasting logic for the simulated transaction to all the node's peers. This includes both fanout and transaction
-    /// reconciliation. For peers selected for fanout, an announcement is scheduled based on the peers type.
+    /// Kickstarts the broadcasting logic for the simulated transaction to all the node's peers. This includes both fanout and
+    /// reconciliation peers. For fanout peers, an announcement is scheduled based on the peers type.
     /// Inbound peers use a shared Poisson timer with expected value of [INBOUND_INVENTORY_BROADCAST_INTERVAL] seconds,
     /// while outbound have a unique one with expected value of [OUTBOUND_INVENTORY_BROADCAST_INTERVAL] seconds.
     /// For peers selected for set reconciliation, this transaction is added to their reconciliation sets and will be made available
@@ -551,12 +371,10 @@ impl Node {
         let mut event = None;
         // Drop the announcement if the peer has already announced the transaction.
         if peer.to_be_announced() {
-            if self.should_fanout_to(&peer_id) {
-                // We are simulating a single transaction, so that always fits within a single INV
-                event = self.send_message_to(NetworkMessage::INV, peer_id, current_time)
-            } else {
+            if peer.is_erlay() {
                 self.get_peer_mut(&peer_id).unwrap().add_tx_to_reconcile();
-                // TODO: Not ready yet, but here we should also respond to pending reconciliation requests when we rework this.
+            } else {
+                event = self.send_message_to(NetworkMessage::INV, peer_id, current_time);
             }
         }
 
@@ -698,7 +516,6 @@ impl Node {
                     ));
                 }
                 NetworkMessage::REQRECON(has_tx) => {
-                    assert!(self.is_erlay, "Trying to send a reconciliation request to peer (peer_id: {peer_id}) but we do not support Erlay");
                     assert!(peer.is_erlay(), "Trying to send a reconciliation request to peer (peer_id: {peer_id}), but they do not support Erlay");
                     if has_tx {
                         assert!(self.knows_transaction(), "Trying to reconcile a transaction with a peer (peer_id: {peer_id}), but we should't know about");
@@ -721,7 +538,6 @@ impl Node {
                     ))
                 }
                 NetworkMessage::SKETCH(sketch) => {
-                    assert!(self.is_erlay, "Trying to send a reconciliation sketch to peer (peer_id: {peer_id}) but we do not support Erlay");
                     assert!(peer.is_erlay(), "Trying to send a reconciliation sketch to peer (peer_id: {peer_id}), but they do not support Erlay");
                     assert!(peer.get_tx_reconciliation_state().unwrap().is_reconciling(), "Trying to send a reconciliation sketch to a peer that hasn't requested so (peer_id: {peer_id})");
                     // This check is a bit of a hack, but in the simulator short_ids and txids match
@@ -733,21 +549,13 @@ impl Node {
                         request_time,
                     ))
                 }
-                NetworkMessage::RECONCILDIFF(wants_tx) => {
-                    assert!(self.is_erlay, "Trying to send a reconciliation difference to peer (peer_id: {peer_id}) but we do not support Erlay");
+                NetworkMessage::RECONCILDIFF(_) => {
                     assert!(peer.is_erlay(), "Trying to send a reconciliation difference to peer (peer_id: {peer_id}), but they do not support Erlay");
 
                     let peer_mut = self.get_peer_mut(&peer_id).unwrap();
                     let peer_recon_state = peer_mut.get_tx_reconciliation_state_mut().unwrap();
                     assert!(peer_recon_state.is_reconciling(), "Trying to send a reconciliation difference to a peer that hasn't requested so (peer_id: {peer_id})");
                     peer_recon_state.clear();
-
-                    // If they offered a transaction that is scheduled for announcement we will request it for reconciliation to prevent probing.
-                    // In this case, mark the scheduled announcement as stale so we do not end up sending an additional INV or adding
-                    // the transaction in the next reconciliation set.
-                    if peer_mut.to_be_announced() && wants_tx {
-                        peer_mut.flag_as_stale();
-                    }
 
                     message = Some(ScheduledEvent::new(
                         Event::receive_message_from(self.node_id, peer_id, msg),
@@ -841,7 +649,6 @@ impl Node {
                     message = self.broadcast_tx(request_time)
                 }
                 NetworkMessage::REQRECON(has_tx) => {
-                    assert!(self.is_erlay, "Received a reconciliation request from peer (peer_id: {peer_id}) but we do not support Erlay");
                     assert!(peer.is_erlay(), "Received a reconciliation request from peer (peer_id: {peer_id}) but they do not support Erlay");
                     if has_tx {
                         // Our INV and their REQRECON may have crossed, but it must not be the case they have sent both an INV and a REQRECON for the same transaction
@@ -861,7 +668,6 @@ impl Node {
                         .map_or(Vec::new(), |x| vec![x])
                 }
                 NetworkMessage::SKETCH(sketch) => {
-                    assert!(self.is_erlay, "Received a reconciliation sketch from peer (peer_id: {peer_id}) but we do not support Erlay");
                     assert!(peer.is_erlay(), "Received a reconciliation sketch from peer (peer_id: {peer_id}) but they do not support Erlay");
 
                     // Compute the local difference and remote difference between the sets (what we are missing and they are missing respectively)
@@ -909,7 +715,6 @@ impl Node {
                 }
                 NetworkMessage::RECONCILDIFF(wants_tx) => {
                     let peer_recon_state = peer.get_tx_reconciliation_state().unwrap();
-                    assert!(self.is_erlay, "Received a reconciliation difference from peer (peer_id: {peer_id}) but we do not support Erlay");
                     assert!(peer.is_erlay(), "Received a reconciliation difference from peer (peer_id: {peer_id}) but they do not support Erlay");
                     assert!(peer_recon_state.is_reconciling(), "Received a reconciliation difference from a peer that we haven't requested to reconcile with (peer_id: {peer_id})");
                     if wants_tx {
@@ -918,22 +723,13 @@ impl Node {
                     }
 
                     // If they don't want the transaction, and it was part of the sketch we sent them, they already know it
-                    let node_id = self.node_id;
                     let we_offered_tx = peer_recon_state.get_sketch_snapshot().get_tx_set();
                     let peer_mut = self.get_peer_mut(&peer_id).unwrap();
                     if !wants_tx && we_offered_tx {
-                        // Flag it as announced as long as they haven't announced it to us already.
-                        // This can happen if an INV is received after we sent a SKETCH but before they
-                        // receive it (SKETCH and INV crossed)
-                        if !peer_mut.they_announced_tx() {
-                            peer_mut.add_tx_announcement(TxAnnouncement::Sent);
-                        } else {
-                            debug_log!(
-                                request_time,
-                                node_id,
-                                "SKETCH and INV crossed with peer (peer_id: {peer_id})"
-                            );
-                        }
+                        // They must not have announced this to us, given we only reconcile for this peer.
+                        // So this must be the first and only time we learn about this.
+                        assert!(!peer_mut.they_announced_tx());
+                        peer_mut.add_tx_announcement(TxAnnouncement::Sent);
                     }
 
                     peer_mut.get_tx_reconciliation_state_mut().unwrap().clear();
@@ -961,104 +757,6 @@ impl Node {
 }
 
 #[cfg(test)]
-mod test_peer {
-    use super::*;
-
-    #[test]
-    fn test_new() {
-        // Inbounds are transaction reconciliation initiators
-        let inbound_erlay_peer = Peer::new(true, true);
-        assert!(inbound_erlay_peer.is_erlay());
-        assert!(
-            inbound_erlay_peer.tx_reconciliation_state.is_some()
-                && inbound_erlay_peer
-                    .tx_reconciliation_state
-                    .unwrap()
-                    .is_initiator()
-        );
-
-        let outbound_erlay_peer = Peer::new(/*is_erlay=*/ true, /*is_inbound=*/ false);
-        assert!(outbound_erlay_peer.is_erlay());
-        assert!(
-            outbound_erlay_peer.tx_reconciliation_state.is_some()
-                && !outbound_erlay_peer
-                    .tx_reconciliation_state
-                    .unwrap()
-                    .is_initiator()
-        );
-
-        // is_inbound is irrelevant here
-        let fanout_peer = Peer::new(/*is_erlay=*/ false, /*is_inbound=*/ false);
-        assert!(!fanout_peer.is_erlay());
-        assert!(fanout_peer.tx_reconciliation_state.is_none());
-    }
-
-    #[test]
-    fn test_add_announced_tx() {
-        // Not exchanged
-        let mut fanout_peer = Peer::new(/*is_erlay=*/ false, /*is_inbound=*/ false);
-        assert!(!fanout_peer.already_announced());
-        // Sent
-        fanout_peer.add_tx_announcement(TxAnnouncement::Sent);
-        assert!(fanout_peer.already_announced());
-        assert!(fanout_peer.we_announced_tx());
-
-        // Received
-        fanout_peer.reset();
-        fanout_peer.add_tx_announcement(TxAnnouncement::Received);
-        assert!(fanout_peer.already_announced());
-        assert!(fanout_peer.they_announced_tx());
-
-        // The same applied for Erlay
-        let mut erlay_peer = Peer::new(/*is_erlay=*/ true, /*is_inbound=*/ false);
-        assert!(!erlay_peer.already_announced());
-        erlay_peer.add_tx_announcement(TxAnnouncement::Sent);
-        assert!(erlay_peer.already_announced());
-        assert!(erlay_peer.we_announced_tx());
-
-        erlay_peer.reset();
-        assert!(!erlay_peer.already_announced());
-        erlay_peer.add_tx_announcement(TxAnnouncement::Received);
-        assert!(erlay_peer.already_announced());
-        assert!(erlay_peer.they_announced_tx());
-
-        // If an erlay peer has a transaction on their pending to be reconciled (either delayed or on the set)
-        // and we add it to announced, it will be removed from reconciliation
-        erlay_peer.reset();
-        erlay_peer.add_tx_to_reconcile();
-
-        // The transaction is in the reconciliation set before flagging it as known
-        assert!(erlay_peer
-            .get_tx_reconciliation_state()
-            .unwrap()
-            .get_recon_set());
-
-        // And is removed after
-        erlay_peer.add_tx_announcement(TxAnnouncement::Sent);
-        assert!(!erlay_peer
-            .get_tx_reconciliation_state()
-            .unwrap()
-            .get_recon_set());
-        assert!(erlay_peer.already_announced());
-    }
-
-    #[test]
-    fn test_add_tx_to_reconcile() {
-        // Fanout peers have no reconciliation state, so data cannot be added to it
-        let mut fanout_peer = Peer::new(/*is_erlay=*/ false, /*is_inbound=*/ false);
-        assert!(!fanout_peer.add_tx_to_reconcile());
-
-        // Erlay peers do have reconciliation state, independently of whether they are initiators or not
-        let mut erlay_peer = Peer::new(/*is_erlay=*/ true, /*is_inbound=*/ false);
-        assert!(erlay_peer.add_tx_to_reconcile());
-        assert!(erlay_peer
-            .get_tx_reconciliation_state()
-            .unwrap()
-            .get_recon_set());
-    }
-}
-
-#[cfg(test)]
 mod test_node {
 
     use super::*;
@@ -1068,7 +766,7 @@ mod test_node {
     fn test_get_next_announcement_time() {
         let rng = Rc::new(RefCell::new(StdRng::from_os_rng()));
         let node_id = 0;
-        let mut node = Node::new(node_id, rng, true, true);
+        let mut node = Node::new(node_id, rng, true);
         let outbound_peer_ids = 1..10;
         let inbound_peer_ids = outbound_peer_ids.end..20;
 
@@ -1126,7 +824,7 @@ mod test_node {
     fn test_connections() {
         let rng = Rc::new(RefCell::new(StdRng::from_os_rng()));
         let node_id = 0;
-        let mut node = Node::new(node_id, rng, true, true);
+        let mut node = Node::new(node_id, rng, true);
         let outbound_peer_ids = 1..10;
         let inbound_peer_ids = outbound_peer_ids.end..20;
 
@@ -1142,85 +840,49 @@ mod test_node {
     }
 
     #[test]
-    fn test_schedule_tx_announcement_no_erlay() {
+    fn test_schedule_tx_announcement() {
         let rng = Rc::new(RefCell::new(StdRng::from_os_rng()));
         let node_id = 0;
-        let mut node = Node::new(node_id, rng, true, true);
+        let mut node = Node::new(node_id, rng, true);
 
-        let outbound_peer_ids = Vec::from_iter(1..11);
-        for peer_id in outbound_peer_ids.iter() {
-            node.connect(*peer_id, false);
+        let fanout_outbound_peer_ids = Vec::from_iter(1..11);
+        for peer_id in fanout_outbound_peer_ids.iter() {
+            node.connect(*peer_id, /*is_erlay=*/ false);
         }
 
-        // For non-erlay peers, schedule_tx_announcement creates an event for each peer
-        // This is completely independent of whether the peer is inbound or outbound
+        let erlay_outbound_peer_ids = Vec::from_iter(12..22);
+        for peer_id in erlay_outbound_peer_ids.iter() {
+            node.connect(*peer_id, /*is_erlay=*/ true);
+        }
+
+        // schedule_tx_announcement creates an event for each peer.
+        // This is completely independent of whether the peer is inbound or outbound fanout or erlay.
         let events = node.schedule_tx_announcement(0);
-        assert_eq!(events.len(), outbound_peer_ids.len());
+        assert_eq!(
+            events.len(),
+            fanout_outbound_peer_ids.len() + erlay_outbound_peer_ids.len()
+        );
         for e in events {
             assert!(matches!(e.inner, Event::ProcessScheduledAnnouncement(..)));
             if let Event::ProcessScheduledAnnouncement(src, dst) = e.inner {
                 assert_eq!(src, node_id);
-                assert!(outbound_peer_ids.contains(&dst));
-                assert!(node.get_peer(&dst).unwrap().to_be_announced())
-            };
-        }
-    }
+                let node = node.get_peer(&dst).unwrap();
+                assert!(node.to_be_announced());
 
-    #[test]
-    fn test_schedule_tx_announcement_erlay() {
-        let rng = Rc::new(RefCell::new(StdRng::from_os_rng()));
-        let node_id = 0;
-        let mut node = Node::new(node_id, rng, true, true);
-        let mut fanout_count = 0;
-        let mut reconciliation_count = 0;
-        let current_time = 0;
-
-        let outbound_peer_ids = Vec::from_iter(1..11);
-        for peer_id in outbound_peer_ids.iter() {
-            node.connect(*peer_id, true);
-        }
-
-        // For Erlay peers, transactions are added flagged to_be_announced or added to the peer's reconciliation set
-        // depending on whether or not the peer is selected for fanout. The decision making is performed by
-        // should_fanout_to. Here, inbound and outbound peers only change the likelihood of being selected
-        let events = node.schedule_tx_announcement(current_time);
-        assert_eq!(events.len(), outbound_peer_ids.len());
-        for e in events {
-            assert!(matches!(e.inner, Event::ProcessScheduledAnnouncement(..)));
-            // Events are all in the future
-            assert!(e.time() > current_time);
-            if let Event::ProcessScheduledAnnouncement(src, dst) = e.inner {
-                assert_eq!(src, node_id);
-                assert!(outbound_peer_ids.contains(&dst));
-                // The transaction always goes through the to_be_announced queue so it is properly delayed
-                // However, peers are picked for fanout or reconciliation at this point
-                assert!(node.get_peer(&dst).unwrap().to_be_announced());
-                if node.should_fanout_to(&dst) {
-                    fanout_count += 1;
-                } else {
-                    reconciliation_count += 1;
-                    // Transactions are not yet placed in the reconciliation set.
-                    // That will happen on trickle (in process_scheduled_announcement)
-                    assert!(!node
-                        .get_peer(&dst)
-                        .unwrap()
-                        .get_tx_reconciliation_state()
-                        .unwrap()
-                        .get_recon_set());
+                if erlay_outbound_peer_ids.contains(&dst) {
+                    // For Erlay peers, transactions are not yet added to the reconciliation set
+                    // (this will happen when the transaction announcement is processed)
+                    assert!(!node.get_tx_reconciliation_state().unwrap().get_recon_set());
                 }
-            };
+            }
         }
-
-        // With 10 outbound peers, one should be picked as fanout, and the rest as set recon
-        assert_eq!(fanout_count, *OUTBOUND_FANOUT_DESTINATIONS);
-        assert_eq!(reconciliation_count, 10 - *OUTBOUND_FANOUT_DESTINATIONS);
     }
 
     #[test]
     fn test_broadcast_tx() {
         let rng = Rc::new(RefCell::new(StdRng::from_os_rng()));
         let node_id = 0;
-        let mut node = Node::new(node_id, rng, true, true);
+        let mut node = Node::new(node_id, rng, true);
         let outbound_peer_ids = Vec::from_iter(1..11);
         let inbound_peer_ids = Vec::from_iter(11..21);
         let current_time = 0;
@@ -1251,7 +913,7 @@ mod test_node {
     fn test_process_scheduled_reconciliation() {
         let rng = Rc::new(RefCell::new(StdRng::from_os_rng()));
         let node_id = 0;
-        let mut node = Node::new(node_id, rng, true, true);
+        let mut node = Node::new(node_id, rng, true);
         let outbound_peer_ids = Vec::from_iter(1..11);
         let current_time = 0;
 
@@ -1260,7 +922,7 @@ mod test_node {
         for peer_id in outbound_peer_ids.iter() {
             node.connect(*peer_id, true);
 
-            // Add a transaction to the reconciliation set of the peer (skip delayed)
+            // Add a transaction to the reconciliation set of the peer
             let recon_set_mut = node
                 .get_peer_mut(peer_id)
                 .unwrap()
@@ -1319,33 +981,38 @@ mod test_node {
     fn test_process_scheduled_announcement() {
         let rng = Rc::new(RefCell::new(StdRng::from_os_rng()));
         let node_id = 0;
-        let mut node = Node::new(node_id, rng, true, true);
+        let mut node = Node::new(node_id, rng, true);
         let current_time = 0;
 
         // Connect several peers so we can have fanout and reconciliation targets
-        let peer_ids = Vec::from_iter(1..11);
+        let fanout_peer_ids = Vec::from_iter(1..11);
+        let erlay_peer_ids = Vec::from_iter(11..22);
 
-        for peer_id in peer_ids.iter() {
-            node.connect(*peer_id, true);
+        for peer_id in fanout_peer_ids.iter() {
+            node.connect(*peer_id, /*is_erlay=*/ false);
+        }
+
+        for peer_id in erlay_peer_ids.iter() {
+            node.connect(*peer_id, /*is_erlay=*/ true);
         }
 
         // Processing a scheduled announcement with no data to be sent returns nothing
-        for peer_id in peer_ids.iter() {
+        for peer_id in fanout_peer_ids.iter().chain(erlay_peer_ids.iter()) {
             assert!(node
                 .process_scheduled_announcement(*peer_id, current_time)
                 .is_none());
         }
 
         // If the peer has data pending to be sent, an INV message containing such data will be returned.
-        // Also, if the peer had some data to be reconciled, that data will be made available (moved out of the delayed set)
+        // If the peer had some data to be reconciled, that data will be made available (placed in the reconciliation set)
 
         // Add the transaction as to be announced for one, and reconciled for the other
         node.add_known_transaction();
         node.schedule_tx_announcement(current_time);
 
-        // The transaction to be reconciled is delayed, they won'b be put in the reconciliation set until the scheduled
+        // The transaction to be reconciled is delayed, they won't be put in the reconciliation set until the scheduled
         // announcement is processed
-        for peer_id in peer_ids.iter() {
+        for peer_id in erlay_peer_ids.iter() {
             assert!(!node
                 .get_peer(peer_id)
                 .unwrap()
@@ -1354,22 +1021,14 @@ mod test_node {
                 .get_recon_set());
         }
 
-        // Processing the scheduled announcement returns an INV for the peers that were selected for fanout, and
-        // nothing for those who were selected for reconciliation (for the later, however, the transaction is added to
-        // their reconciliation sets)
-        for peer_id in peer_ids.iter() {
+        // Processing the scheduled announcement returns an INV for fanout peers, and nothing for erlay peers
+        // (for the later, however, the transaction is added to their reconciliation sets)
+        for peer_id in fanout_peer_ids.iter().chain(erlay_peer_ids.iter()) {
             let result = node.process_scheduled_announcement(*peer_id, current_time);
-            if node.fanout_targets.contains(peer_id) {
+            if !node.get_peer(peer_id).unwrap().is_erlay() {
                 let inv_event = result.unwrap().inner;
                 assert!(matches!(inv_event, Event::ReceiveMessageFrom(..)));
                 assert!(inv_event.get_message().unwrap().is_inv());
-                // Nothing is added to the reconciliation set of fanout peers
-                assert!(!node
-                    .get_peer(peer_id)
-                    .unwrap()
-                    .get_tx_reconciliation_state()
-                    .unwrap()
-                    .get_recon_set());
             } else {
                 assert!(result.is_none());
                 assert!(node
@@ -1386,7 +1045,7 @@ mod test_node {
     fn test_add_request() {
         let rng = Rc::new(RefCell::new(StdRng::from_os_rng()));
         let node_id = 0;
-        let mut node = Node::new(node_id, rng, true, true);
+        let mut node = Node::new(node_id, rng, true);
         let current_time = 0;
 
         // Add one outbound and one inbound peer
@@ -1434,7 +1093,7 @@ mod test_node {
     fn test_process_delayed_request() {
         let rng = Rc::new(RefCell::new(StdRng::from_os_rng()));
         let node_id = 0;
-        let mut node = Node::new(node_id, rng, true, true);
+        let mut node = Node::new(node_id, rng, true);
         let current_time = 0;
 
         let inbound_id = 1;
@@ -1466,4 +1125,64 @@ mod test_node {
     // [Node::send_message_to] and [Node::receive_message_from] are self tested.
     // They include asserts for every sent/received message that would make the
     // message flow fail on runtime if anything was wrong
+
+    #[test]
+    fn test_receive_transaction_while_reconciling() {
+        // Tests a rare edge case where a transaction can be received while the node is reconciling, added to the
+        // reconciliation set, but then cleared when the round ends without having been sent to the peer.
+        let rng = Rc::new(RefCell::new(StdRng::from_os_rng()));
+        let node_id = 0;
+        let current_time = 0;
+
+        let mut node = Node::new(node_id, rng.clone(), true);
+        let peer_id = 1;
+        node.accept_connection(peer_id, /*is_erlay=*/ true);
+
+        // Peer sends REQRECON(). We don't have the tx yet, so we respond with and empty SKETCH
+        let e = node.receive_message_from(NetworkMessage::REQRECON(false), peer_id, current_time);
+        assert_eq!(e.len(), 1);
+        let sketch = match e[0].inner.get_message().unwrap() {
+            NetworkMessage::SKETCH(s) => *s,
+            _ => panic!("Expected SKETCH"),
+        };
+        assert!(!sketch.get_tx_set());
+
+        // The transaction is added to the peer's reconciliation set after we sent the SKETCH but
+        // before we received the RECONCILDIFF.
+        // Notice we don't have to have received the transaction here. It's enough to have had a scheduled
+        // announcement for that peer that triggered in between the two messages.
+        node.broadcast_tx(current_time);
+        node.process_scheduled_announcement(peer_id, current_time);
+        assert!(node
+            .get_peer(&peer_id)
+            .unwrap()
+            .get_tx_reconciliation_state()
+            .unwrap()
+            .get_recon_set());
+
+        // Peer replies with an empty RECONCILDIFF, given none of us had anything to share
+        let diff_result =
+            node.receive_message_from(NetworkMessage::RECONCILDIFF(false), peer_id, current_time);
+        assert!(diff_result.is_empty());
+
+        // Here, if the reconciliation set is not persisted across rounds, the transaction will never be shared over this link
+        // That is, if clear wipes the reconciliation set, the the transaction will be cleared before we had the chance to exchange it
+        assert!(
+            node.get_peer(&peer_id)
+                .unwrap()
+                .get_tx_reconciliation_state()
+                .unwrap()
+                .get_recon_set(),
+            "recon_set must not be cleared by clear() so the tx can be offered next round"
+        );
+
+        // Next reconciliation round. Peer sends REQRECON(false) again. Now we must offer the tx.
+        let e = node.receive_message_from(NetworkMessage::REQRECON(false), peer_id, current_time);
+        assert_eq!(e.len(), 1);
+        let sketch = match e[0].inner.get_message().unwrap() {
+            NetworkMessage::SKETCH(s) => *s,
+            _ => panic!("Expected SKETCH"),
+        };
+        assert!(sketch.get_tx_set());
+    }
 }

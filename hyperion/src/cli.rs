@@ -1,7 +1,7 @@
 use clap::Parser;
 use log::LevelFilter;
 
-use hyper_lib::{SimulationParameters, MAX_OUTBOUND_CONNECTIONS};
+use hyper_lib::{SimulationParameters, MAX_ERLAY_OUTBOUND_CONNECTIONS, MAX_OUTBOUND_CONNECTIONS};
 
 /// Default number of unreachable nodes in the simulated network.
 const UNREACHABLE_NODE_COUNT: usize = 100000;
@@ -19,9 +19,12 @@ pub struct Cli {
     /// The number of unreachable nodes in the simulated network.
     #[clap(long, short, default_value_t = UNREACHABLE_NODE_COUNT, requires="reachable")]
     pub unreachable: usize,
-    /// The number of outbound connections established per node.
+    /// The number of fanout outbound connections established per node.
     #[clap(long, short, default_value_t = MAX_OUTBOUND_CONNECTIONS)]
     pub outbounds: usize,
+    /// The number of reconciliation outbound connections established per node.
+    #[clap(long, short, default_value_t = MAX_ERLAY_OUTBOUND_CONNECTIONS, requires="erlay")]
+    pub erlay_outbounds: usize,
     /// Level of verbosity of the messages displayed by the simulator.
     /// Possible values: [off, error, warn, info, debug, trace]
     #[clap(long, short, verbatim_doc_comment, default_value = "info")]

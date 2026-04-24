@@ -7,6 +7,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use rand::rngs::StdRng;
+use rand::seq::index;
 use rand_distr::{Distribution, LogNormal, Uniform};
 use std::collections::{HashMap, HashSet};
 
@@ -146,7 +147,6 @@ pub struct Network {
     // Links between nodes, with their associated latencies
     links: HashMap<Link, u64>,
     network_latency: bool,
-    is_erlay: bool,
     reachable_count: usize,
 }
 
@@ -154,17 +154,17 @@ impl Network {
     pub fn new(
         reachable_count: usize,
         unreachable_count: usize,
-        outbounds_count: usize,
+        fanout_outbounds_count: usize,
+        erlay_outbounds_count: Option<usize>,
         network_latency: bool,
-        is_erlay: bool,
         rng: Rc<RefCell<StdRng>>,
     ) -> Self {
         let mut reachable_nodes = (0..reachable_count)
-            .map(|i| Node::new(i, rng.clone(), true, is_erlay))
+            .map(|i| Node::new(i, rng.clone(), true))
             .collect::<Vec<_>>();
         let mut unreachable_nodes: Vec<Node> = (reachable_count
             ..reachable_count + unreachable_count)
-            .map(|i| Node::new(i, rng.clone(), false, is_erlay))
+            .map(|i| Node::new(i, rng.clone(), false))
             .collect::<Vec<_>>();
 
         log::info!(
@@ -174,37 +174,39 @@ impl Network {
             unreachable_count
         );
 
-        let peers_die = Uniform::new(0, reachable_nodes.len()).unwrap();
-        let mut borrowed_rng = rng.borrow_mut();
+        let mut borrowed_rng: std::cell::RefMut<'_, StdRng> = rng.borrow_mut();
+        let total_count = if let Some(erlay_count) = erlay_outbounds_count {
+            fanout_outbounds_count + erlay_count
+        } else {
+            fanout_outbounds_count
+        };
 
         log::info!(
             "Connecting unreachable nodes to reachable ({} outbounds per node)",
-            outbounds_count
+            total_count
         );
         let mut link_ids = Network::connect_unreachable(
             &mut unreachable_nodes,
             &mut reachable_nodes,
-            outbounds_count,
-            is_erlay,
+            fanout_outbounds_count,
+            erlay_outbounds_count,
             &mut borrowed_rng,
-            &peers_die,
         );
 
         log::info!(
             "Connecting reachable nodes to reachable ({} outbounds per node)",
-            outbounds_count
+            total_count
         );
         link_ids.extend(Network::connect_reachable(
             &mut reachable_nodes,
-            outbounds_count,
-            is_erlay,
+            fanout_outbounds_count,
+            erlay_outbounds_count,
             &mut borrowed_rng,
-            &peers_die,
         ));
 
         log::info!(
             "Created a total of {} links between nodes",
-            (unreachable_count + reachable_count) * outbounds_count
+            (unreachable_count + reachable_count) * total_count
         );
 
         let mut nodes = reachable_nodes;
@@ -232,78 +234,106 @@ impl Network {
             nodes,
             links,
             network_latency,
-            is_erlay,
+
             reachable_count,
         }
     }
 
-    pub fn is_erlay(&self) -> bool {
-        self.is_erlay
-    }
-
-    /// Connects a collection of unreachable nodes to a collection of reachable ones.
-    /// A given pair of nodes will have, at most, one connection between them.
-    /// Nodes to be connected to are picked at random given an uniform distribution [dist]
+    /// Connects a collection of unreachable nodes to a collection of reachable nodes.
+    /// Each unreachable node will have [outbounds_count] outbound connections, and X additional
+    /// outbound reconciliation connections if [erlay] is true.
+    /// Nodes to be connected to are picked at random using [index::sample].
     fn connect_unreachable(
         unreachable_nodes: &mut [Node],
         reachable_nodes: &mut [Node],
-        outbounds_count: usize,
-        are_erlay: bool,
+        fanout_outbounds_count: usize,
+        erlay_outbound_count: Option<usize>,
         rng: &mut StdRng,
-        dist: &Uniform<NodeId>,
     ) -> Vec<Link> {
-        let mut links = Vec::new();
+        let total_count = if let Some(erlay_count) = erlay_outbound_count {
+            fanout_outbounds_count + erlay_count
+        } else {
+            fanout_outbounds_count
+        };
+
+        assert!(
+            total_count <= reachable_nodes.len(),
+            "total_count ({total_count}) exceeds number of reachable nodes ({})",
+            reachable_nodes.len()
+        );
+
+        let mut links = Vec::with_capacity(unreachable_nodes.len() * total_count);
+
         for node in unreachable_nodes.iter_mut() {
-            let mut already_connected_to = HashSet::new();
-            for _ in 0..outbounds_count {
-                let peer_id = Network::get_peer_to_connect(&mut already_connected_to, rng, dist);
-                node.connect(peer_id, are_erlay);
+            // This works because reachable nodes are assigned first, so their ids go from [0...reachable_nodes.len())
+            for (i, peer_id) in index::sample(rng, reachable_nodes.len(), total_count)
+                .into_iter()
+                .enumerate()
+            {
+                let is_erlay = i >= fanout_outbounds_count;
+                node.connect(peer_id, is_erlay);
                 reachable_nodes
                     .get_mut(peer_id)
                     .unwrap_or_else(|| {
                         panic!("Cannot connect to reachable peer {peer_id}. Peer not found")
                     })
-                    .accept_connection(node.get_id(), are_erlay);
+                    .accept_connection(node.get_id(), is_erlay);
                 links.push((node.get_id(), peer_id).into());
             }
         }
+
         links
     }
 
     /// Connects a collection of reachable nodes between them.
     /// A given pair of nodes will have, at most, one connection between them.
-    /// Nodes to be connected to are picked at random given an uniform distribution [dist]
+    /// Each node will have [outbounds_count] outbound fanout connections, and X additional
+    /// outbound reconciliation connections if [erlay] is true.
+    /// Nodes to be connected to are picked at random using a uniform distribution over the reachable nodes ids.
     fn connect_reachable(
         reachable_nodes: &mut [Node],
-        outbounds_count: usize,
-        are_erlay: bool,
+        fanout_outbounds_count: usize,
+        erlay_outbound_count: Option<usize>,
         rng: &mut StdRng,
-        dist: &Uniform<NodeId>,
     ) -> Vec<Link> {
-        let mut links = Vec::new();
+        let total_count = if let Some(erlay_count) = erlay_outbound_count {
+            fanout_outbounds_count + erlay_count
+        } else {
+            fanout_outbounds_count
+        };
+
+        assert!(
+            total_count < reachable_nodes.len(),
+            "total_count ({total_count}) exceeds number of connectable reachable nodes ({})",
+            reachable_nodes.len() - 1
+        );
+
+        let mut links = Vec::with_capacity(reachable_nodes.len() * total_count);
+        // Create our peer die such that it only selects reachable peer ids
+        let peers_die = Uniform::new(0, reachable_nodes.len()).unwrap();
+
         for node_id in 0..reachable_nodes.len() {
             let mut already_connected_to =
                 HashSet::from_iter(reachable_nodes[node_id].get_inbound_peer_ids());
-
             already_connected_to.insert(node_id);
 
-            for _ in 0..outbounds_count {
-                let peer_id = Network::get_peer_to_connect(&mut already_connected_to, rng, dist);
+            for i in 0..total_count {
+                let is_erlay = i >= fanout_outbounds_count;
+                let peer_id =
+                    Network::get_peer_to_connect(&mut already_connected_to, rng, &peers_die);
 
+                // Rust does not allow two mutable borrows into the same slice simultaneously.
+                // Split the slice at the higher index so both node and peer fall in different halves.
                 let (node, peer) = if peer_id < node_id {
                     let (r1, r2) = reachable_nodes.split_at_mut(node_id);
-                    let peer = &mut r1[peer_id];
-                    let node = &mut r2[0];
-                    (node, peer)
+                    (&mut r2[0], &mut r1[peer_id])
                 } else {
                     let (r1, r2) = reachable_nodes.split_at_mut(peer_id);
-                    let node = &mut r1[node_id];
-                    let peer = &mut r2[0];
-                    (node, peer)
+                    (&mut r1[node_id], &mut r2[0])
                 };
 
-                node.connect(peer_id, are_erlay);
-                peer.accept_connection(node_id, are_erlay);
+                node.connect(peer_id, is_erlay);
+                peer.accept_connection(node_id, is_erlay);
                 links.push((node.get_id(), peer_id).into());
             }
         }

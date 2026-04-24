@@ -18,7 +18,7 @@ The transaction relaying logic follows Bitcoin Core's design:
     - For inbounds, the delay follows a Poisson process with an expected value of `INBOUND_INVENTORY_BROADCAST_INTERVAL(5s)`. All inbounds are on the same timer
     - For outbounds, the delay follows a Poisson process with an expected value of `OUTBOUND_INVENTORY_BROADCAST_INTERVAL(2s)`. Every outbound has a unique timer
 - `GETDATA`s are prioritized to outbound peers, hence if an inbound peer announces a transaction, the request will be delayed by `NONPREF_PEER_TX_DELAY(2s)`, and superseded by any other request by an outbound peer<sup>1</sup>
-- `REQRECON` messages are sent on a fix timer, in a round-robin fashion every `RECON_REQUEST_INTERVAL(8s)`, meaning each request will go out every `8/n`s where `n` is the outbound peer count of the node
+- `REQRECON` messages are sent on a fix timer, in a round-robin fashion every `RECON_REQUEST_INTERVAL(30s)`, meaning each request will go out every `30/n`s where `n` is the outbound peer count of the node
 - `SKETCH`es exchanged between peers contain transactions as long as those would have been requestable by the peer at the time of sharing the sketch (this means if an `INV` containing such transaction would have been created)
 
 All messages exchanged between peers are added some network latency, which is sampled at random from a Log Normal distribution with expected value of `10ms` and variance of `2ms`.
@@ -39,7 +39,9 @@ Options:
   -u, --unreachable <UNREACHABLE>
           The number of unreachable nodes in the simulated network [default: 100000]
   -o, --outbounds <OUTBOUNDS>
-          The number of outbound connections established per node [default: 8]
+          The number of fanout outbound connections established per node [default: 8]
+  -e, --erlay-outbounds <ERLAY_OUTBOUNDS>
+          The number of reconciliation outbound connections established per node [default: 4]
   -l, --log-level <LOG_LEVEL>
           Level of verbosity of the messages displayed by the simulator.
           Possible values: [off, error, warn, info, debug, trace] [default: info]
@@ -54,7 +56,7 @@ Options:
   -n <N>
           Number of times the simulation will be repeated. Smooths the statistical results [default: 1]
       --output-file <OUTPUT_FILE>
-          The path to an output file where to store simulation results to, in csv.
+          An output file name where to store simulation results to, in csv.
           If the file already exists, data will be appended to it, otherwise it will be created [aliases: out]
   -h, --help
           Print help
