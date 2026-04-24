@@ -1259,4 +1259,64 @@ mod test_node {
     // [Node::send_message_to] and [Node::receive_message_from] are self tested.
     // They include asserts for every sent/received message that would make the
     // message flow fail on runtime if anything was wrong
+
+    #[test]
+    fn test_receive_transaction_while_reconciling() {
+        // Tests a rare edge case where a transaction can be received while the node is reconciling, added to the
+        // reconciliation set, but then cleared when the round ends without having been sent to the peer.
+        let rng = Rc::new(RefCell::new(StdRng::from_os_rng()));
+        let node_id = 0;
+        let current_time = 0;
+
+        let mut node = Node::new(node_id, rng.clone(), true);
+        let peer_id = 1;
+        node.accept_connection(peer_id, /*is_erlay=*/ true);
+
+        // Peer sends REQRECON(). We don't have the tx yet, so we respond with and empty SKETCH
+        let e = node.receive_message_from(NetworkMessage::REQRECON(false), peer_id, current_time);
+        assert_eq!(e.len(), 1);
+        let sketch = match e[0].inner.get_message().unwrap() {
+            NetworkMessage::SKETCH(s) => *s,
+            _ => panic!("Expected SKETCH"),
+        };
+        assert!(!sketch.get_tx_set());
+
+        // The transaction is added to the peer's reconciliation set after we sent the SKETCH but
+        // before we received the RECONCILDIFF.
+        // Notice we don't have to have received the transaction here. It's enough to have had a scheduled
+        // announcement for that peer that triggered in between the two messages.
+        node.broadcast_tx(current_time);
+        node.process_scheduled_announcement(peer_id, current_time);
+        assert!(node
+            .get_peer(&peer_id)
+            .unwrap()
+            .get_tx_reconciliation_state()
+            .unwrap()
+            .get_recon_set());
+
+        // Peer replies with an empty RECONCILDIFF, given none of us had anything to share
+        let diff_result =
+            node.receive_message_from(NetworkMessage::RECONCILDIFF(false), peer_id, current_time);
+        assert!(diff_result.is_empty());
+
+        // Here, if the reconciliation set is not persisted across rounds, the transaction will never be shared over this link
+        // That is, if clear wipes the reconciliation set, the the transaction will be cleared before we had the chance to exchange it
+        assert!(
+            node.get_peer(&peer_id)
+                .unwrap()
+                .get_tx_reconciliation_state()
+                .unwrap()
+                .get_recon_set(),
+            "recon_set must not be cleared by clear() so the tx can be offered next round"
+        );
+
+        // Next reconciliation round. Peer sends REQRECON(false) again. Now we must offer the tx.
+        let e = node.receive_message_from(NetworkMessage::REQRECON(false), peer_id, current_time);
+        assert_eq!(e.len(), 1);
+        let sketch = match e[0].inner.get_message().unwrap() {
+            NetworkMessage::SKETCH(s) => *s,
+            _ => panic!("Expected SKETCH"),
+        };
+        assert!(sketch.get_tx_set());
+    }
 }
