@@ -111,11 +111,14 @@ pub struct Simulator {
 }
 
 impl Simulator {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         reachable_count: usize,
         unreachable_count: usize,
         fanout_outbounds_count: usize,
         erlay_outbounds_count: Option<usize>,
+        reachable_sink_fraction: f32,
+        unreachable_sink_fraction: f32,
         seed: &mut Option<u64>,
         network_latency: bool,
     ) -> Self {
@@ -131,6 +134,8 @@ impl Simulator {
             unreachable_count,
             fanout_outbounds_count,
             erlay_outbounds_count,
+            reachable_sink_fraction,
+            unreachable_sink_fraction,
             network_latency,
             rng.clone(),
         );
@@ -207,10 +212,16 @@ impl Simulator {
         Some(scheduled_event.time())
     }
 
-    pub fn get_random_nodeid(&mut self) -> NodeId {
-        self.rng
-            .borrow_mut()
-            .random_range(0..self.network.get_node_count())
+    pub fn get_random_non_sink_nodeid(&mut self) -> NodeId {
+        loop {
+            let id = self
+                .rng
+                .borrow_mut()
+                .random_range(0..self.network.get_node_count());
+            if !self.network.get_node(id).unwrap().is_sink() {
+                return id;
+            }
+        }
     }
 
     pub fn get_node(&self, node_id: NodeId) -> Option<&Node> {
@@ -223,5 +234,9 @@ impl Simulator {
 
     pub fn get_nodes(&self) -> &Vec<Node> {
         self.network.get_nodes()
+    }
+
+    pub fn clear_events(&mut self) {
+        self.event_queue.clear();
     }
 }

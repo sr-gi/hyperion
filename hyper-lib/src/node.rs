@@ -70,6 +70,8 @@ pub struct Node {
     rng: Rc<RefCell<StdRng>>,
     /// Whether the node is reachable or not
     is_reachable: bool,
+    /// Whether the node is a sink: receives the transaction but does not forward it
+    is_sink: bool,
     /// Map of peers identified by their (global) node identifier
     peers: BTreeMap<NodeId, Peer>,
     /// FIXME: We may want to merge requested_tx and known_tx into a single enum, maybe even add delayed_request
@@ -94,6 +96,7 @@ impl Node {
             node_id,
             rng,
             is_reachable,
+            is_sink: false,
             peers: BTreeMap::new(),
             requested_transaction: false,
             delayed_request: None,
@@ -102,6 +105,14 @@ impl Node {
             outbounds_poisson_timer: PoissonTimer::new(*OUTBOUND_INVENTORY_BROADCAST_INTERVAL),
             node_statistics: NodeStatistics::new(),
         }
+    }
+
+    pub fn set_as_sink(&mut self) {
+        self.is_sink = true;
+    }
+
+    pub fn is_sink(&self) -> bool {
+        self.is_sink
     }
 
     // Resets the node state so a new round of the simulation can be run from a clean state
@@ -147,6 +158,10 @@ impl Node {
 
     pub fn get_id(&self) -> NodeId {
         self.node_id
+    }
+
+    pub fn get_peer_ids(&self) -> Vec<NodeId> {
+        self.peers.keys().copied().collect()
     }
 
     pub fn get_inbound_peer_ids(&self) -> Vec<NodeId> {
@@ -644,7 +659,12 @@ impl Node {
                 NetworkMessage::TX => {
                     assert!(!self.knows_transaction(), "Received the transaction from a peer (peer_id: {peer_id}), but we already knew about it");
                     assert!(peer.they_announced_tx(), "Received a transaction from a peer without an announcement (peer_id {peer_id})");
-                    message = self.broadcast_tx(request_time)
+                    if self.is_sink {
+                        self.add_known_transaction();
+                        message = Vec::new();
+                    } else {
+                        message = self.broadcast_tx(request_time)
+                    }
                 }
                 NetworkMessage::REQRECON(has_tx) => {
                     assert!(peer.is_erlay(), "Received a reconciliation request from peer (peer_id: {peer_id}) but they do not support Erlay");

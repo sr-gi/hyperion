@@ -47,6 +47,10 @@ Options:
           Possible values: [off, error, warn, info, debug, trace] [default: info]
   -p, --percentile-target <PERCENTILE_TARGET>
           Propagation percentile target. Use to measure transaction propagation times [default: 90]
+      --reachable-sinks <REACHABLE_SINKS>
+          Percentage of reachable nodes that act as sinks: they receive the transaction but do not forward it [default: 0]
+      --unreachable-sinks <UNREACHABLE_SINKS>
+          Percentage of unreachable nodes that act as sinks: they receive the transaction but do not forward it [default: 0]
       --erlay
           Whether or not nodes in the simulation support Erlay (all of them for now, this is likely to change)
   -s, --seed <SEED>

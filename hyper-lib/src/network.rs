@@ -4,12 +4,12 @@ use crate::txreconciliation::Sketch;
 use crate::SECS_TO_NANOS;
 
 use std::cell::RefCell;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 
 use rand::rngs::StdRng;
 use rand::seq::index;
 use rand_distr::{Distribution, LogNormal, Uniform};
-use std::collections::{HashMap, HashSet};
 
 static NET_LATENCY_MEAN: f64 = 0.01 * SECS_TO_NANOS as f64; // 10ms
 
@@ -151,11 +151,14 @@ pub struct Network {
 }
 
 impl Network {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         reachable_count: usize,
         unreachable_count: usize,
         fanout_outbounds_count: usize,
         erlay_outbounds_count: Option<usize>,
+        reachable_sink_fraction: f32,
+        unreachable_sink_fraction: f32,
         network_latency: bool,
         rng: Rc<RefCell<StdRng>>,
     ) -> Self {
@@ -208,6 +211,32 @@ impl Network {
             "Created a total of {} links between nodes",
             (unreachable_count + reachable_count) * total_count
         );
+
+        let reachable_sink_count =
+            (reachable_count as f32 * reachable_sink_fraction).round() as usize;
+        let unreachable_sink_count =
+            (unreachable_count as f32 * unreachable_sink_fraction).round() as usize;
+
+        if reachable_sink_count > 0 {
+            log::info!(
+                "The network contains {}% sinks amongst the reachable nodes ({} nodes)",
+                (reachable_sink_fraction * 100.0).round(),
+                reachable_sink_count
+            );
+            for i in index::sample(&mut borrowed_rng, reachable_count, reachable_sink_count) {
+                reachable_nodes[i].set_as_sink();
+            }
+        }
+        if unreachable_sink_count > 0 {
+            log::info!(
+                "The network contains {}% sinks amongst the unreachable nodes ({} nodes)",
+                (unreachable_sink_fraction * 100.0).round(),
+                unreachable_sink_count
+            );
+            for i in index::sample(&mut borrowed_rng, unreachable_count, unreachable_sink_count) {
+                unreachable_nodes[i].set_as_sink();
+            }
+        }
 
         let mut nodes = reachable_nodes;
         nodes.extend(unreachable_nodes);
@@ -405,5 +434,27 @@ impl Network {
 
     pub fn get_links(&self) -> &HashMap<Link, u64> {
         &self.links
+    }
+
+    /// BFS from `source` on the undirected peer graph. Sinks are included in the reachable set
+    /// but are not expanded, so nodes reachable only through sinks are excluded.
+    pub fn compute_reachable_set(&self, source_id: NodeId) -> HashSet<NodeId> {
+        let mut visited = HashSet::new();
+        let mut queue = VecDeque::new();
+
+        visited.insert(source_id);
+        if !self.get_node(source_id).unwrap().is_sink() {
+            queue.push_back(source_id);
+        }
+
+        while let Some(node_id) = queue.pop_front() {
+            for peer_id in self.get_node(node_id).unwrap().get_peer_ids() {
+                if visited.insert(peer_id) && !self.get_node(peer_id).unwrap().is_sink() {
+                    queue.push_back(peer_id);
+                }
+            }
+        }
+
+        visited
     }
 }

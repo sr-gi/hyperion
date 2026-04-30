@@ -24,15 +24,28 @@ pub struct SimulationParameters {
     pub unreachable: usize,
     /// Whether or not nodes in the simulation support Erlay (all of them for now)
     pub erlay: bool,
+    /// Percentage of reachable nodes that are sinks (do not forward transactions)
+    pub reachable_sink_percentage: u8,
+    /// Percentage of unreachable nodes that are sinks (do not forward transactions)
+    pub unreachable_sink_percentage: u8,
 }
 
 impl SimulationParameters {
-    pub fn new(n: u32, reachable: usize, unreachable: usize, erlay: bool) -> Self {
+    pub fn new(
+        n: u32,
+        reachable: usize,
+        unreachable: usize,
+        erlay: bool,
+        reachable_sink_percentage: u8,
+        unreachable_sink_percentage: u8,
+    ) -> Self {
         SimulationParameters {
             n,
             reachable,
             unreachable,
             erlay,
+            reachable_sink_percentage,
+            unreachable_sink_percentage,
         }
     }
 }
@@ -41,9 +54,10 @@ impl SimulationParameters {
 #[serde(rename_all = "kebab-case")]
 pub struct OutputResult {
     timestamp: u64,
-    percentile_target: u16,
+    percentile_target: u8,
     percentile_time: u64,
     full_propagation_time: u64,
+    avg_nodes_reached: usize,
     #[serde(rename = "r-sent-msgs")]
     reachable_sent_msgs: f32,
     #[serde(rename = "r-received-msgs")]
@@ -76,14 +90,19 @@ pub struct OutputResult {
     out_poisson_mean: u16,
     n: u32,
     erlay: bool,
+    #[serde(rename = "r-sink-pct")]
+    reachable_sink_percentage: u8,
+    #[serde(rename = "u-sink-pct")]
+    unreachable_sink_percentage: u8,
     seed: u64,
 }
 
 impl OutputResult {
     pub fn new(
-        percentile_target: u16,
+        percentile_target: u8,
         percentile_time: u64,
         full_propagation_time: u64,
+        avg_nodes_reached: usize,
         statistics: NetworkStatistics,
         sim_params: SimulationParameters,
         seed: u64,
@@ -99,6 +118,7 @@ impl OutputResult {
             percentile_time,
             percentile_target,
             full_propagation_time,
+            avg_nodes_reached,
             reachable_sent_msgs: avg_msgs.sent_reachable() / n_float,
             reachable_received_msgs: avg_msgs.received_reachable() / n_float,
             reachable_msg_volume: (avg_msgs.sent_reachable() + avg_msgs.received_reachable())
@@ -122,21 +142,43 @@ impl OutputResult {
             reachable_count: sim_params.reachable,
             unreachable_count: sim_params.unreachable,
             erlay: sim_params.erlay,
+            reachable_sink_percentage: sim_params.reachable_sink_percentage,
+            unreachable_sink_percentage: sim_params.unreachable_sink_percentage,
             seed,
         }
     }
 
     pub fn display(&self) {
-        log::info!(
-            "Transaction reached {}% of nodes in the network in {}s",
-            self.percentile_target,
-            Duration::from_nanos(self.percentile_time).as_secs_f32()
-        );
-        if self.percentile_target < 100 {
+        let total_nodes = self.reachable_count + self.unreachable_count;
+        let has_sinks = self.reachable_sink_percentage > 0 || self.unreachable_sink_percentage > 0;
+
+        if has_sinks {
+            let non_isolated_pct = self.avg_nodes_reached as f32 / total_nodes as f32 * 100.0;
             log::info!(
-                "Transaction reached all nodes in {}s",
-                Duration::from_nanos(self.full_propagation_time).as_secs_f32()
+                "Transaction has reached {}% of the non-isolated network ({:.1}% of total) in {}s",
+                self.percentile_target,
+                non_isolated_pct,
+                Duration::from_nanos(self.percentile_time).as_secs_f32()
             );
+            if self.percentile_target < 100 {
+                log::info!(
+                    "Transaction has reached all of the non-isolated network ({:.1}% of total) in {}s",
+                    non_isolated_pct,
+                    Duration::from_nanos(self.full_propagation_time).as_secs_f32()
+                );
+            }
+        } else {
+            log::info!(
+                "Transaction reached {}% of nodes in the network in {}s",
+                self.percentile_target,
+                Duration::from_nanos(self.percentile_time).as_secs_f32()
+            );
+            if self.percentile_target < 100 {
+                log::info!(
+                    "Transaction reached all nodes in {}s",
+                    Duration::from_nanos(self.full_propagation_time).as_secs_f32()
+                );
+            }
         }
         log::info!(
             "Reachable nodes data volume: {} messages ({} bytes) (avg)",
