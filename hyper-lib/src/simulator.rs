@@ -111,11 +111,14 @@ pub struct Simulator {
 }
 
 impl Simulator {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         reachable_count: usize,
         unreachable_count: usize,
-        outbounds_count: usize,
-        is_erlay: bool,
+        fanout_outbounds_count: usize,
+        erlay_outbounds_count: Option<usize>,
+        reachable_sink_fraction: f32,
+        unreachable_sink_fraction: f32,
         seed: &mut Option<u64>,
         network_latency: bool,
     ) -> Self {
@@ -129,9 +132,11 @@ impl Simulator {
         let network = Network::new(
             reachable_count,
             unreachable_count,
-            outbounds_count,
+            fanout_outbounds_count,
+            erlay_outbounds_count,
+            reachable_sink_fraction,
+            unreachable_sink_fraction,
             network_latency,
-            is_erlay,
             rng.clone(),
         );
 
@@ -143,32 +148,30 @@ impl Simulator {
     }
 
     pub fn schedule_set_reconciliation(&mut self, current_time: u64) {
-        if self.network.is_erlay() {
-            for node in self.network.get_nodes_mut() {
-                // Schedule transaction reconciliation here. As opposite to fanout, reconciliation is scheduled
-                // on a fixed interval. This means that we need to start it when the connection is made. However,
-                // in the simulator, the whole network is build at the same (discrete) time. This does not follow
-                // reality, so we will pick a random value between the simulation start time (current_time) and
-                // RECON_REQUEST_INTERVAL as the first scheduled reconciliation for each connection.
-                let start_time = current_time
-                    + self
-                        .rng
-                        .borrow_mut()
-                        .random_range(0..RECON_REQUEST_INTERVAL * SECS_TO_NANOS);
+        for node in self.network.get_nodes_mut() {
+            // Schedule transaction reconciliation here. As opposite to fanout, reconciliation is scheduled
+            // on a fixed interval. This means that we need to start it when the connection is made. However,
+            // in the simulator, the whole network is build at the same (discrete) time. This does not follow
+            // reality, so we will pick a random value between the simulation start time (current_time) and
+            // RECON_REQUEST_INTERVAL as the first scheduled reconciliation for each connection.
+            let start_time = current_time
+                + self
+                    .rng
+                    .borrow_mut()
+                    .random_range(0..RECON_REQUEST_INTERVAL * SECS_TO_NANOS);
 
-                // Make it so we reconcile with all peers every RECON_REQUEST_INTERVAL
-                let outbound_peers = node.get_outbound_peer_ids();
-                let delta = ((RECON_REQUEST_INTERVAL as f64 / outbound_peers.len() as f64)
-                    * SECS_TO_NANOS as f64)
-                    .round() as u64;
+            // Make it so we reconcile with all erlay peers every RECON_REQUEST_INTERVAL
+            let outbound_erlay_peers = node.get_erlay_outbound_peer_ids();
+            let delta = ((RECON_REQUEST_INTERVAL as f64 / outbound_erlay_peers.len() as f64)
+                * SECS_TO_NANOS as f64)
+                .round() as u64;
 
-                for (i, peer_id) in outbound_peers.iter().enumerate() {
-                    // Schedule interleaved reconciliation. All outbound peers are reconciled every RECON_REQUEST_INTERVAL, with a
-                    // RECON_REQUEST_INTERVAL/N step, where N is the number of outbound peers
-                    self.event_queue.push(
-                        node.schedule_set_reconciliation(peer_id, start_time + (delta * i as u64)),
-                    );
-                }
+            for (i, peer_id) in outbound_erlay_peers.iter().enumerate() {
+                // Schedule interleaved reconciliation. All erlay outbound peers are reconciled every RECON_REQUEST_INTERVAL, with a
+                // RECON_REQUEST_INTERVAL/N step, where N is the number of erlay outbounds
+                self.event_queue.push(
+                    node.schedule_set_reconciliation(peer_id, start_time + (delta * i as u64)),
+                );
             }
         }
     }
@@ -209,10 +212,16 @@ impl Simulator {
         Some(scheduled_event.time())
     }
 
-    pub fn get_random_nodeid(&mut self) -> NodeId {
-        self.rng
-            .borrow_mut()
-            .random_range(0..self.network.get_node_count())
+    pub fn get_random_non_sink_nodeid(&mut self) -> NodeId {
+        loop {
+            let id = self
+                .rng
+                .borrow_mut()
+                .random_range(0..self.network.get_node_count());
+            if !self.network.get_node(id).unwrap().is_sink() {
+                return id;
+            }
+        }
     }
 
     pub fn get_node(&self, node_id: NodeId) -> Option<&Node> {
@@ -225,5 +234,9 @@ impl Simulator {
 
     pub fn get_nodes(&self) -> &Vec<Node> {
         self.network.get_nodes()
+    }
+
+    pub fn clear_events(&mut self) {
+        self.event_queue.clear();
     }
 }

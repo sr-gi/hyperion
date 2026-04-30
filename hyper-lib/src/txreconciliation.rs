@@ -47,10 +47,17 @@ impl TxReconciliationState {
         }
     }
 
+    /// Clears per-round reconciliation state. Preserves `recon_set` so that transactions
+    /// added after a sketch was sent are not lost when the round completes.
     pub fn clear(&mut self) {
         self.is_reconciling = false;
-        self.recon_set = false;
         self.sketch_snapshot = None;
+    }
+
+    /// Full reset between simulation iterations.
+    pub fn reset(&mut self) {
+        self.clear();
+        self.recon_set = false;
     }
 
     pub fn is_initiator(&self) -> bool {
@@ -125,99 +132,98 @@ impl TxReconciliationState {
     }
 }
 
-// #[cfg(test)]
-// mod test {
-//     use super::*;
+#[cfg(test)]
+mod test {
+    use super::*;
 
-//     #[test]
-//     fn test_recon_state() {
-//         let mut tx_recon_state = TxReconciliationState::new(true);
-//         tx_recon_state.set_reconciling();
-//         assert!(tx_recon_state.is_reconciling());
-//         assert!(!tx_recon_state.recon_set);
-//         assert!(!tx_recon_state.delayed_set);
+    #[test]
+    fn test_recon_state() {
+        let mut tx_recon_state = TxReconciliationState::new(true);
+        tx_recon_state.set_reconciling();
+        assert!(tx_recon_state.is_reconciling());
+        assert!(!tx_recon_state.recon_set);
+        assert!(!tx_recon_state.has_sketch_snapshot());
 
-//         // Add a transaction to the recon_set
-//         tx_recon_state.add_tx();
+        // Add a transaction to the recon_set
+        tx_recon_state.add_tx();
 
-//         // Check that the transaction has been added to the delayed
-//         // set, but the recon set remains empty
-//         assert!(!tx_recon_state.recon_set);
-//         assert!(tx_recon_state.delayed_set);
-//         assert!(tx_recon_state.is_reconciling());
+        // Check that the transaction has been added to the set
+        assert!(tx_recon_state.recon_set);
+        assert!(tx_recon_state.is_reconciling());
+        assert!(!tx_recon_state.has_sketch_snapshot());
 
-//         // Move to available and check again
-//         tx_recon_state.make_delayed_available();
-//         assert!(tx_recon_state.recon_set);
-//         assert!(!tx_recon_state.delayed_set);
-//         assert!(tx_recon_state.is_reconciling());
+        // Try to remove a transaction from the set
+        tx_recon_state.remove_tx();
+        assert!(!tx_recon_state.recon_set);
+        assert!(tx_recon_state.is_reconciling());
+        assert!(!tx_recon_state.has_sketch_snapshot());
 
-//         // Clear, not including delayed (they are only included when cleaning after a simulation)
-//         // and check that both sets are empty
-//         tx_recon_state.clear(/*include_delayed=*/ false);
-//         assert!(!tx_recon_state.recon_set);
-//         assert!(!tx_recon_state.delayed_set);
-//         assert!(!tx_recon_state.is_reconciling());
+        // We can add it again now and compute the sketch
+        tx_recon_state.add_tx();
+        tx_recon_state.compute_sketch(true);
+        assert!(tx_recon_state.has_sketch_snapshot());
+        assert!(tx_recon_state.recon_set);
 
-//         // Add again, leave data in delayed and clear
-//         tx_recon_state.add_tx();
-//         tx_recon_state.clear(/*include_delayed=*/ true);
-//         assert!(!tx_recon_state.recon_set);
-//         assert!(!tx_recon_state.delayed_set);
-//         assert!(!tx_recon_state.is_reconciling());
+        // Clear (this leaves recon set as is, it is only emptied with reset
+        // at the end of the simulation)
+        tx_recon_state.clear();
+        assert!(tx_recon_state.recon_set);
+        assert!(!tx_recon_state.is_reconciling());
+        assert!(!tx_recon_state.has_sketch_snapshot());
 
-//         // If data is held in recon_set, delayed_set must be empty
-//         // so not testing that case
-//     }
+        // Reset clears everything
+        tx_recon_state.reset();
+        assert!(!tx_recon_state.recon_set);
+        assert!(!tx_recon_state.is_reconciling());
+        assert!(!tx_recon_state.has_sketch_snapshot());
+    }
 
-//     #[test]
-//     fn test_sketch() {
-//         // Start from an empty state
-//         let mut tx_recon_state = TxReconciliationState::new(true);
+    #[test]
+    fn test_sketch() {
+        // Start from an empty state
+        let mut tx_recon_state = TxReconciliationState::new(true);
 
-//         // Create their sketch without the transaction. Since none of us know the transaction, the diff size will be 0
-//         let mut diff_size = 0;
-//         let mut their_sketch = Sketch::new(false, diff_size);
-//         assert!(their_sketch.get_size() == diff_size);
+        // Create their sketch without the transaction. Since none of us know the transaction, the diff size will be 0
+        let mut diff_size = 0;
+        let mut their_sketch = Sketch::new(false, diff_size);
+        assert!(their_sketch.get_size() == diff_size);
 
-//         // Compute the diffs and check. None of us know the transaction so the diff should be false
-//         let (our_diff, their_diff) = tx_recon_state.compute_sketch_diff(their_sketch);
-//         assert!(!our_diff);
-//         assert!(!their_diff);
+        // Compute the diffs and check. None of us know the transaction so the diff should be false
+        let (our_diff, their_diff) = tx_recon_state.compute_sketch_diff(their_sketch);
+        assert!(!our_diff);
+        assert!(!their_diff);
 
-//         // Add the tx to the recon set
-//         tx_recon_state.add_tx();
-//         tx_recon_state.make_delayed_available();
+        // Add the tx to the recon set
+        tx_recon_state.add_tx();
 
-//         // Change their sketch, since now the difference will be 1
-//         diff_size = 1;
-//         their_sketch = Sketch::new(false, diff_size);
-//         assert!(their_sketch.get_size() == diff_size);
+        // Change their sketch, since now the difference will be 1
+        diff_size = 1;
+        their_sketch = Sketch::new(false, diff_size);
+        assert!(their_sketch.get_size() == diff_size);
 
-//         // Compute the diffs and check. We know the tx and they don't, so our diff should be false and theirs should be true
-//         let (our_diff, their_diff) = tx_recon_state.compute_sketch_diff(their_sketch);
-//         assert!(!our_diff);
-//         assert!(their_diff);
+        // Compute the diffs and check. We know the tx and they don't, so our diff should be false and theirs should be true
+        let (our_diff, their_diff) = tx_recon_state.compute_sketch_diff(their_sketch);
+        assert!(!our_diff);
+        assert!(their_diff);
 
-//         // Update it so now we don't know but they do
-//         tx_recon_state.clear(true);
-//         their_sketch = Sketch::new(true, diff_size);
-//         assert!(their_sketch.get_size() == diff_size);
+        // Update it so now we don't know but they do
+        tx_recon_state.reset();
+        their_sketch = Sketch::new(true, diff_size);
+        assert!(their_sketch.get_size() == diff_size);
 
-//         // Compute the diffs and check. They know the transaction and we don't, so out diff should be true and theirs should be false
-//         let (our_diff, their_diff) = tx_recon_state.compute_sketch_diff(their_sketch);
-//         assert!(our_diff);
-//         assert!(!their_diff);
+        // Compute the diffs and check. They know the transaction and we don't, so out diff should be true and theirs should be false
+        let (our_diff, their_diff) = tx_recon_state.compute_sketch_diff(their_sketch);
+        assert!(our_diff);
+        assert!(!their_diff);
 
-//         // Update it so both of us know the transaction
-//         diff_size = 0;
-//         tx_recon_state.add_tx();
-//         tx_recon_state.make_delayed_available();
-//         their_sketch = Sketch::new(true, diff_size);
+        // Update it so both of us know the transaction
+        diff_size = 0;
+        tx_recon_state.add_tx();
+        their_sketch = Sketch::new(true, diff_size);
 
-//         // Compute the diffs and check. We both know the transaction, so both diff should be false
-//         let (our_diff, their_diff) = tx_recon_state.compute_sketch_diff(their_sketch);
-//         assert!(!our_diff);
-//         assert!(!their_diff);
-//     }
-// }
+        // Compute the diffs and check. We both know the transaction, so both diff should be false
+        let (our_diff, their_diff) = tx_recon_state.compute_sketch_diff(their_sketch);
+        assert!(!our_diff);
+        assert!(!their_diff);
+    }
+}

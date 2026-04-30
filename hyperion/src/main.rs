@@ -19,13 +19,17 @@ fn main() -> anyhow::Result<()> {
         .init()
         .unwrap();
 
-    let node_count = cli.reachable + cli.unreachable;
-    let target_node_count = node_count as f32 * (cli.percentile_target as f32 / 100.0);
     let mut simulator = Simulator::new(
         cli.reachable,
         cli.unreachable,
         cli.outbounds,
-        cli.erlay,
+        if cli.erlay {
+            Some(cli.erlay_outbounds)
+        } else {
+            None
+        },
+        cli.reachable_sinks as f32 / 100.0,
+        cli.unreachable_sinks as f32 / 100.0,
         &mut cli.seed,
         !cli.no_latency,
     );
@@ -39,6 +43,7 @@ fn main() -> anyhow::Result<()> {
     let start_time = 0;
     let mut overall_propagation_time = 0;
     let mut overall_time = 0;
+    let mut overall_nodes_reached: usize = 0;
 
     // Display a progress bar only if we are running in multi-simulation mode
     let sty = ProgressStyle::with_template(if cli.n > 1 {
@@ -51,7 +56,7 @@ fn main() -> anyhow::Result<()> {
 
     for _ in (0..cli.n).progress().with_style(sty) {
         // Pick a (source) node to broadcast the target transaction from
-        let source_node_id = simulator.get_random_nodeid();
+        let source_node_id = simulator.get_random_non_sink_nodeid();
         log::debug!(
             "Starting simulation: broadcasting transaction from node {source_node_id} ({})",
             if source_node_id < cli.reachable {
@@ -61,6 +66,13 @@ fn main() -> anyhow::Result<()> {
             }
         );
 
+        // Compute which nodes can receive the transaction given the current source and sink layout.
+        // Sinks are included in the reachable set (they do receive the tx) but are not expanded,
+        // so nodes whose only paths to the source run through sinks are excluded.
+        let reachable_set = simulator.network.compute_reachable_set(source_node_id);
+        let reachable_count = reachable_set.len();
+        let target_node_count = reachable_count as f32 * (cli.percentile_target as f32 / 100.0);
+
         // For statistical purposes
         let mut nodes_reached = 1;
         let mut percentile_time = 0;
@@ -69,7 +81,10 @@ fn main() -> anyhow::Result<()> {
         // Bootstrap the set reconciliation events (if needed) and send out the transaction.
         // All simulations start at time 0 so we don't have to carry any offset when computing
         // the overall time
-        simulator.schedule_set_reconciliation(start_time);
+        if cli.erlay {
+            simulator.schedule_set_reconciliation(start_time);
+        }
+
         for e in simulator
             .get_node_mut(source_node_id)
             .unwrap()
@@ -81,19 +96,14 @@ fn main() -> anyhow::Result<()> {
         // We don't need to account for the time the source withholds it
         let first_seen_time = simulator.get_next_event_time().unwrap();
 
-        // Process events until the queue is empty
+        // Process events until all reachable nodes have the transaction.
+        // We break early rather than draining the queue to handle Erlay simulations, where
+        // reconciliation timers between nodes that can never learn the tx would loop forever.
         while let Some(scheduled_event) = simulator.get_next_event() {
             let (event, current_time) = scheduled_event.into();
             match event {
                 Event::ReceiveMessageFrom(src, dst, msg) => {
-                    if msg.is_tx() {
-                        nodes_reached += 1;
-                        if percentile_time == 0 && nodes_reached as f32 >= target_node_count {
-                            percentile_time = current_time - first_seen_time;
-                        } else if nodes_reached == node_count {
-                            propagation_time = current_time - first_seen_time;
-                        }
-                    }
+                    let is_tx = msg.is_tx();
 
                     let future_events = simulator
                         .network
@@ -101,6 +111,17 @@ fn main() -> anyhow::Result<()> {
                         .unwrap()
                         .receive_message_from(msg, src, current_time);
                     simulator.add_events(future_events);
+
+                    if is_tx {
+                        nodes_reached += 1;
+                        if percentile_time == 0 && nodes_reached as f32 >= target_node_count {
+                            percentile_time = current_time - first_seen_time;
+                        }
+                        if nodes_reached == reachable_count {
+                            propagation_time = current_time - first_seen_time;
+                            break;
+                        }
+                    }
                 }
                 Event::ProcessScheduledAnnouncement(src, dst) => {
                     if let Some(scheduled_event) = simulator
@@ -133,18 +154,24 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        // Make sure every node has received the transaction
-        for node in simulator.network.get_nodes() {
-            assert!(node.knows_transaction());
-            for peer in node.get_outbound_peers() {
-                assert!(peer.already_announced())
-            }
+        // Make sure every node in the reachable set has received the transaction
+        for node_id in &reachable_set {
+            assert!(
+                simulator
+                    .network
+                    .get_node(*node_id)
+                    .unwrap()
+                    .knows_transaction(),
+                "Node {node_id} is in the reachable set but did not receive the transaction"
+            );
         }
 
         assert_ne!(percentile_time, 0);
         overall_time += percentile_time;
         overall_propagation_time += propagation_time;
+        overall_nodes_reached += nodes_reached;
 
+        simulator.clear_events();
         for node in simulator.network.get_nodes_mut() {
             node.reset();
         }
@@ -152,11 +179,13 @@ fn main() -> anyhow::Result<()> {
 
     let avg_percentile_time = (overall_time as f32 / cli.n as f32).round() as u64;
     let avg_propagation_time = (overall_propagation_time as f32 / cli.n as f32).round() as u64;
+    let avg_nodes_reached = (overall_nodes_reached as f32 / cli.n as f32).round() as usize;
     let statistics = simulator.network.get_statistics();
     let output_result = hyper_lib::OutputResult::new(
         cli.percentile_target,
         avg_percentile_time,
         avg_propagation_time,
+        avg_nodes_reached,
         statistics,
         cli.get_simulation_params(),
         cli.seed.unwrap(),
